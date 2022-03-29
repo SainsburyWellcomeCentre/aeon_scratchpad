@@ -31,7 +31,7 @@ def fixID(subjid, valid_ids=None,valid_id_file=None):
 
     if not valid_ids:
         if not valid_id_file:
-            valid_id_file = path.expanduser('~/mnt/delab/conf/valid_ids.csv')
+            valid_id_file = path.expanduser('/nfs/winstor/delab/conf/valid_ids.csv')
             
         df = pd.read_csv(valid_id_file)
         valid_ids = df.id.values
@@ -83,7 +83,7 @@ def loadSessions(dataroot):
     sessdf.reset_index(inplace=True, drop=True)
 
     df = sessdf.copy()
-    valid_id_file = path.expanduser('~/mnt/delab/conf/valid_ids.csv')
+    valid_id_file = path.expanduser('/nfs/winstor/delab/conf/valid_ids.csv')
     vdf = pd.read_csv(valid_id_file)
     valid_ids = list(vdf.id.values[vdf.real.values==1])
     fix = lambda x: fixID(x, valid_ids=valid_ids)
