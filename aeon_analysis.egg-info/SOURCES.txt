@@ -1,0 +1,12 @@
+README.md
+setup.py
+aeon_analysis/__init__.py
+aeon_analysis.egg-info/PKG-INFO
+aeon_analysis.egg-info/SOURCES.txt
+aeon_analysis.egg-info/dependency_links.txt
+aeon_analysis.egg-info/top_level.txt
+aeon_analysis/social/__init__.py
+aeon_analysis/social/arena0.py
+aeon_analysis/social/helpers.py
+aeon_analysis/social/plotting.py
+aeon_analysis/social/social.ipynb
