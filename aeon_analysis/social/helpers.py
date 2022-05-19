@@ -2,9 +2,9 @@ from os import path
 import pandas as pd
 import numpy as np
 from pandas.core.frame import DataFrame
-import aeon.analyze.patches as patches
+import aeon_analysis.exp01.patches as patches
+import aeon_analysis.social.plotting as aplot
 import aeon.preprocess.api as api
-import aeon.util.plotting as aplot
 from functools import cache
 import jellyfish as jl
 
