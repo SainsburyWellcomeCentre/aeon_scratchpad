@@ -21,14 +21,15 @@ from dotmap import DotMap
 from aeon.preprocess import api
 from aeon_analysis.social import helpers
 
-# Show:
+# Plots:
 # 1) 2-d occupancy histograms
+# 2) 1-d occupancy distributions
+# 3) sns pairplot
 
 # <s Get session metadata
 
 exp_root = '/nfs/winstor/delab/data/arena0.1/socialexperiment0'
 session_metadata = helpers.loadSessions(exp_root)
-# NOTE: data of 187.5 thresh sessions from 2022 02 15-17 is MISSING!
 start_ts = pd.Timestamp('2022-01-16')
 end_ts = pd.Timestamp('2022-02-11')
 i_good_sess = (np.logical_and(session_metadata['start'] > start_ts, session_metadata[
@@ -207,6 +208,17 @@ for i, h5 in enumerate(h5s):
     ind2_np_locs = np.setdiff1d(df.index.values,
                                 np.concatenate((ind2_rp_locs, ind2_pp_locs)))
 
+    fig, ax = plt.subplots(nrows=1, ncols=2)
+    sns.histplot(x=ind1_x, y=ind1_y, ax=ax[0], stat='percent', bins=30, cbar=True,
+                 cmap='autumn')
+    sns.histplot(x=ind2_x, y=ind2_y, ax=ax[1], stat='percent', bins=30, cbar=True,
+                 cmap='summer')
+    fig.suptitle(ids + f" rp={rp_id}: {rp_pel} pel; pp={pp_id}: {pp_pel} pel; "
+                       f"thresh_diff: {p_diff}")
+    fig.savefig(f"/nfs/nhome/live/jbhagat/dlc_playground/de_lab_meeting"
+                f"/paired_occ_histmaps"
+                f"/{ids}.png")
+
     # Get combined positions
     ind1_locs = np.zeros(len(df))
     ind1_locs[ind1_rp_locs] = 1   # rp
@@ -230,7 +242,69 @@ for i, h5 in enumerate(h5s):
                         (pp_rp_p, pp_pp_p, pp_np_p),
                         (np_rp_p, np_pp_p, np_np_p)))
 
-
+    # Generate synthetic null distribution for each combo of occupancy
+    rp_rp_null_dist = np.outer(occ1[:, 0], occ2[:, 0])
+    rp_rp_null_dist = random.choices(rp_rp_null_dist.flatten(), k=100)
+    rp_pp_null_dist = np.outer(occ1[:, 0], occ2[:, 1])
+    rp_pp_null_dist = random.choices(rp_pp_null_dist.flatten(), k=100)
+    rp_np_null_dist = np.outer(occ1[:, 0], occ2[:, 2])
+    rp_np_null_dist = random.choices(rp_np_null_dist.flatten(), k=100)
+    pp_rp_null_dist = np.outer(occ1[:, 1], occ2[:, 0])
+    pp_rp_null_dist = random.choices(pp_rp_null_dist.flatten(), k=100)
+    pp_pp_null_dist = np.outer(occ1[:, 1], occ2[:, 1])
+    pp_pp_null_dist = random.choices(pp_pp_null_dist.flatten(), k=100)
+    pp_np_null_dist = np.outer(occ1[:, 1], occ2[:, 2])
+    pp_np_null_dist = random.choices(pp_np_null_dist.flatten(), k=100)
+    np_rp_null_dist = np.outer(occ1[:, 2], occ2[:, 0])
+    np_rp_null_dist = random.choices(np_rp_null_dist.flatten(), k=100)
+    np_pp_null_dist = np.outer(occ1[:, 2], occ2[:, 1])
+    np_pp_null_dist = random.choices(np_pp_null_dist.flatten(), k=100)
+    np_np_null_dist = np.outer(occ1[:, 2], occ2[:, 2])
+    np_np_null_dist = random.choices(np_np_null_dist.flatten(), k=100)
+    all_dists = np.array((
+        (rp_rp_null_dist),
+        (rp_pp_null_dist),
+        (rp_np_null_dist),
+        (pp_rp_null_dist),
+        (pp_pp_null_dist),
+        (pp_np_null_dist),
+        (np_rp_null_dist),
+        (np_pp_null_dist),
+        (np_np_null_dist),
+    ))
+    all_dists = all_dists.transpose()
+    titles = ['rp-rp', 'rp-pp', 'rp-np', 'pp-rp', 'pp-pp', 'pp-np', 'np-rp', 'np-pp',
+              'np-np']
+    # 1-d dist plots
+    fig, axs = plt.subplots(nrows=3, ncols=3)
+    for occ_idx in range(9):
+        ax = axs.flatten()[occ_idx]
+        tru_val = comb_pos.flatten()[occ_idx].round(4)
+        sns.histplot(all_dists[:, occ_idx], bins=25, kde=True, ax=ax, fill=True)
+        vh = ax.axvline(x=tru_val, ymax=ax.get_ylim()[1], color='m')
+        ax.set_title(titles[occ_idx])
+        ax.set_ylabel('')
+        # ax.legend([vh], ['syn_null_dist', f'actual={tru_val}'])
+    axs[2, 0].set_xlabel('P[x]')
+    axs[2, 0].set_ylabel('Count')
+    fig.suptitle(ids + f" rp={rp_id}: {rp_pel} pel; pp={pp_id}: {pp_pel} pel; "
+                       f"thresh_diff: {p_diff}")
+    fig.savefig(f"/nfs/nhome/live/jbhagat/dlc_playground/de_lab_meeting/1d_occ_dists"
+                f"/{ids}.png")
+    fig.show()
+    all_dists_df = pd.DataFrame(all_dists)
+    all_dists_df.columns = titles
+    emp_vs_syn = pd.Series()
+    all_dists_df['emp_vs_syn'] = 'syn'
+    # add empirical data
+    all_dists_df = all_dists_df.append(pd.Series(comb_pos.flatten(), index=titles),
+                                       ignore_index=True)
+    all_dists_df.emp_vs_syn.iloc[-1] = 'emp'
+    fig_pp = sns.pairplot(all_dists_df, hue="emp_vs_syn")
+    fig_pp.fig.suptitle(ids + f" rp={rp_id}: {rp_pel} pel; pp={pp_id}: {pp_pel} pel; "
+                              f"thresh_diff: {p_diff}")
+    fig_pp.savefig(f"/nfs/nhome/live/jbhagat/dlc_playground/de_lab_meeting"
+                   f"/sns_pairplots/{ids}.png")
     
 
     len(np.where(np.logical_and(np.logical_and(np.isnan(df.ind1_body_right_bottom_x),
