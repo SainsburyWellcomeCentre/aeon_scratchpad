@@ -21,6 +21,9 @@ from dotmap import DotMap
 from aeon.preprocess import api
 from aeon_analysis.social import helpers
 
+plt.rcParams['figure.figsize'] = [12, 8]
+plt.rcParams['figure.dpi'] = 200
+
 # Plots:
 # 1) 2-d occupancy histograms
 # 2) 1-d occupancy distributions
@@ -47,18 +50,24 @@ session_metadata.drop(index=session_metadata.iloc[i_bad_sess].index, inplace=Tru
 # (proportion of time in rich patch (rp), poor patch (pp), or neither (n))
 
 # Patch locations, and threshold to be considered "in patch"
-p1_x, p1_y = (370, 590)
-p2_x, p2_y = (1070, 590)
+p2_x, p2_y = (370, 590)
+p1_x, p1_y = (1070, 590)
 pix_radius_thresh = 180
 
 # Craft occupancy arrays for each individual
 n_ind_ses = 7
 n_occ_locs = 3  # (rp, pp, n)
 occ_704 = np.zeros((n_ind_ses, n_occ_locs))
+occ_704_pre = np.zeros((n_ind_ses, n_occ_locs))
+occ_704_post = np.zeros((n_ind_ses, n_occ_locs))
 ses_ct_704 = 0
 occ_705 = np.zeros((n_ind_ses, n_occ_locs))
+occ_705_pre = np.zeros((n_ind_ses, n_occ_locs))
+occ_705_post = np.zeros((n_ind_ses, n_occ_locs))
 ses_ct_705 = 0
 occ_706 = np.zeros((n_ind_ses, n_occ_locs))
+occ_706_pre = np.zeros((n_ind_ses, n_occ_locs))
+occ_706_post = np.zeros((n_ind_ses, n_occ_locs))
 ses_ct_706 = 0
 for s in session_metadata.itertuples():
     # Skip social sessions.
@@ -66,6 +75,7 @@ for s in session_metadata.itertuples():
         continue
     # Find rich patch (rp) and poor patch (pp).
     p1_patch_data = api.patchdata(exp_root, 'Patch1', start=s.start, end=s.end)
+    p2_patch_data = api.patchdata(exp_root, 'Patch2', start=s.start, end=s.end)
     if p1_patch_data.threshold[-1] == 100:
         rp_x, rp_y = p1_x, p1_y
         pp_x, pp_y = p2_x, p2_y
@@ -75,85 +85,119 @@ for s in session_metadata.itertuples():
     pos = api.positiondata(exp_root, start=s.start, end=s.end)
     pos = pos[pos.id == 0.0]
     pos = pos[~np.isnan(pos.x)]
+    both_patch_data = pd.concat([p1_patch_data, p2_patch_data])
+    change_ts = (
+        both_patch_data.iloc[np.where(np.diff(both_patch_data.threshold))[0][0]].name)
 
+    change_idx = (change_ts - s.start).seconds * 50
     dist2rp = np.sqrt( ((pos.x - rp_x) ** 2) + ((pos.y - rp_y) ** 2) )
     rp_p = len(np.where(dist2rp < pix_radius_thresh)[0]) / len(pos)
+    rp_p_pre = (len(np.where(dist2rp[0:change_idx] < pix_radius_thresh)[0]) 
+                / len(pos[0:change_idx]))
+    rp_p_post = (len(np.where(dist2rp[change_idx:] < pix_radius_thresh)[0]) 
+                 / len(pos[change_idx:]))
     dist2pp = np.sqrt(((pos.x - pp_x) ** 2) + ((pos.y - pp_y) ** 2))
     pp_p = len(np.where(dist2pp < pix_radius_thresh)[0]) / len(pos)
+    pp_p_pre = (len(np.where(dist2pp[0:change_idx] < pix_radius_thresh)[0]) 
+                / len(pos[0:change_idx]))
+    pp_p_post = (len(np.where(dist2pp[change_idx:] < pix_radius_thresh)[0]) 
+                 / len(pos[change_idx:]))
     if '704' in s.id:
         occ_704[ses_ct_704, :] = (rp_p, pp_p, (1 - (rp_p + pp_p)))
+        occ_704_pre[ses_ct_704, :] = (rp_p_pre, pp_p_pre, (1 - (rp_p_pre + pp_p_pre)))
+        occ_704_post[ses_ct_704, :] = (rp_p_post, pp_p_post, 
+                                       (1 - (rp_p_post + pp_p_post)))
         ses_ct_704 += 1
     elif '705' in s.id:
         occ_705[ses_ct_705, :] = (rp_p, pp_p, (1 - (rp_p + pp_p)))
+        occ_705_pre[ses_ct_705, :] = (rp_p_pre, pp_p_pre, (1 - (rp_p_pre + pp_p_pre)))
+        occ_705_post[ses_ct_705, :] = (rp_p_post, pp_p_post, 
+                                       (1 - (rp_p_post + pp_p_post)))
         ses_ct_705 += 1
     elif '706' in s.id:
         occ_706[ses_ct_706, :] = (rp_p, pp_p, (1 - (rp_p + pp_p)))
+        occ_706_pre[ses_ct_706, :] = (rp_p_pre, pp_p_pre, (1 - (rp_p_pre + pp_p_pre)))
+        occ_706_post[ses_ct_706, :] = (rp_p_post, pp_p_post, 
+                                       (1 - (rp_p_post + pp_p_post)))
         ses_ct_706 += 1
 # /s>
 
 # <s Social session analysis:
 # For each session, get occupancy information for each mouse individually,
 
-p1_x, p1_y = (280, 350)
-p2_x, p2_y = (970, 350)
+p2_x, p2_y = (280, 350)
+p1_x, p1_y = (970, 350)
 pix_radius_thresh = 180
 
-pairings = DotMap({
-    '01-21': DotMap({'ind1': '705', 'ind2': '706'}),
-    '01-25': DotMap({'ind1': '704', 'ind2': '705'}),
-    '01-26': DotMap({'ind1': '704', 'ind2': '706'}),
-    '01-27': DotMap({'ind2': '705', 'ind1': '706'}),
-    '02-01': DotMap({'ind1': '704', 'ind2': '705'}),
-    '02-02': DotMap({'ind1': '704', 'ind2': '706'}),
-    '02-03': DotMap({'ind1': '705', 'ind2': '706'}),
-    '02-08': DotMap({'ind1': '704', 'ind2': '705'}),
-    '02-09': DotMap({'ind1': '704', 'ind2': '706'}),
-    '02-10': DotMap({'ind1': '705', 'ind2': '706'}),
-})
+# pairings = DotMap({
+#     '01-21': DotMap({'ind1': '705', 'ind2': '706'}),
+#     '01-25': DotMap({'ind1': '704', 'ind2': '705'}),
+#     '01-26': DotMap({'ind1': '704', 'ind2': '706'}),
+#     '01-27': DotMap({'ind2': '705', 'ind1': '706'}),
+#     '02-01': DotMap({'ind1': '704', 'ind2': '705'}),
+#     '02-02': DotMap({'ind1': '704', 'ind2': '706'}),
+#     '02-03': DotMap({'ind1': '705', 'ind2': '706'}),
+#     '02-08': DotMap({'ind1': '704', 'ind2': '705'}),
+#     '02-09': DotMap({'ind1': '704', 'ind2': '706'}),
+#     '02-10': DotMap({'ind1': '705', 'ind2': '706'}),
+# })
 # [1, 2, 3] = rp, pp, np: ind1; [11, 12, 13] = rp, pp, np: ind2
 # ['rp_rp' : 11, 'rp_pp' : 12, 'rp_np' : 13,
 #  'pp_rp' : 22, 'pp_pp' : 24, 'pp_np' : 26,
 #  'np_rp' : 33, 'np_pp' : 36, 'np_np' : 39]
-eval_key = DotMap({
-    'pp_pp'
-})
 
-
-
-# Compute list of occupancy hist for each individual session for all animals
-occ_705_706 = np.zeros((4, 3, 3))  # n_sessions, 704: (p1, p2, n), 705: (p1, p2, n)
-ses_ct_705_706 = 0
-occ_704_705 = np.zeros((3, 3, 3))  # n_sessions, 704: (p1, p2, n), 705: (p1, p2, n)
-ses_ct_704_705 = 0
-occ_704_706 = np.zeros((3, 3, 3))  # n_sessions, 704: (p1, p2, n), 705: (p1, p2, n)
-ses_ct_704_706 = 0
+# Good ma id-tracked sessions are: 1-21, 1-25, 2-03, 2-08, 2-09
 h5s = glob("/nfs/nhome/live/jbhagat/dlc_playground/occupancy_video_analysis/*.h5")
 h5s.sort()
+h5s = [h5s[0], h5s[1], h5s[6], h5s[7], h5s[8]]
 # Each figure is 3x3
 # fig_704_705
 # fig_704_706
 # fig_705_706
 # for each social session
-social_sess = [54, 55, 56, 58, 67, 68, 70, 76, 78, 80]
-p_diffs = [14, 14, 14, 14, 6.5, 6.5, 6.5, 2.75, 2.75, 2.75]
+# social_sess = [54, 55, 56, 58, 67, 68, 70, 76, 78, 80]
+social_sess = [54, 55, 70, 76, 78]
+# p_diffs = [14, 14, 14, 14, 6.5, 6.5, 6.5, 2.75, 2.75, 2.75]
+p_diffs = [1400, 1400, 650, 275, 275]
+
+# CHANGE
+i = 4; h5 = h5s[i]
 for i, h5 in enumerate(h5s):
+    p_diff = p_diffs[i]
     s = session_metadata.loc[social_sess[i]]
+    print(s.id)
+    occ1 = occ_704
+    occ1_pre = occ_704_pre
+    occ1_post = occ_704_post
+    occ2 = occ_706
+    occ2_pre = occ_706_pre
+    occ2_post = occ_706_post
+    ids = '704-706_' + str(s.start)[0:10]
+    # 704: autumn, 705: summer, 706: winter
+    map1 = 'autumn'; map2 = 'winter'
+    
     # Find rich patch (rp) and poor patch (pp).
     p1_patch_data = api.patchdata(exp_root, 'Patch1', start=s.start, end=s.end)
+    p2_patch_data = api.patchdata(exp_root, 'Patch2', start=s.start, end=s.end)
     if p1_patch_data.threshold[-1] == 100:
         rp_x, rp_y = p1_x, p1_y
         pp_x, pp_y = p2_x, p2_y
     else:
         rp_x, rp_y = p2_x, p2_y
         pp_x, pp_y = p1_x, p1_y
+    both_patch_data = pd.concat([p1_patch_data, p2_patch_data])
+    change_ts = (
+        both_patch_data.iloc[np.where(np.diff(both_patch_data.threshold))[0][0]].name)
     r = random.randint(0, 1000)
     df = pd.read_hdf(h5)
     # flatten multi-index df
     new_cols = np.zeros_like(df.columns.values)
-    for i, col in enumerate(df.columns.values):
-        new_cols[i] = '_'.join(df.columns.values[i][1:])
+    for i_col, col in enumerate(df.columns.values):
+        new_cols[i_col] = '_'.join(df.columns.values[i_col][1:])
     df.columns = new_cols
 
+    change_idx = (change_ts - pd.Timestamp(Path(h5).parts[-1].split('_')[
+                                              1]).tz_localize(None)).seconds * 50
     # Get ind1 positions
     ind1_x = df.ind1_body_right_top_x
     ind1_x[np.isnan(ind1_x)] = df.ind1_body_right_bottom_x[np.isnan(ind1_x)]
@@ -164,6 +208,8 @@ for i, h5 in enumerate(h5s):
     random.seed(r)
     ind1_x[ind1_nans] = (
         random.choices(ind1_x2sample.values, k=len(np.where(np.isnan(ind1_x))[0])))
+    ind1_x_pre = ind1_x[0:change_idx]
+    ind1_x_post = ind1_x[change_idx:]
     
     ind1_y = df.ind1_body_right_top_y
     ind1_y[np.isnan(ind1_y)] = df.ind1_body_right_bottom_y[np.isnan(ind1_y)]
@@ -173,13 +219,21 @@ for i, h5 in enumerate(h5s):
     random.seed(r)
     ind1_y[np.isnan(ind1_y)] = (
         random.choices(ind1_y2sample.values, k=len(np.where(np.isnan(ind1_y))[0])))
+    ind1_y_pre = ind1_y[0:change_idx]
+    ind1_y_post = ind1_y[change_idx:]
 
     ind1_dist2rp = np.sqrt(((ind1_x - rp_x) ** 2) + ((ind1_y - rp_y) ** 2))
     ind1_rp_locs = np.where(ind1_dist2rp < pix_radius_thresh)[0]
+    ind1_rp_locs_pre = ind1_rp_locs[0:change_idx]
+    ind1_rp_locs_post = ind1_rp_locs[change_idx:]
     ind1_dist2pp = np.sqrt(((ind1_x - pp_x) ** 2) + ((ind1_y - pp_y) ** 2))
     ind1_pp_locs = np.where(ind1_dist2pp < pix_radius_thresh)[0]
+    ind1_pp_locs_pre = ind1_pp_locs[0:change_idx]
+    ind1_pp_locs_post = ind1_pp_locs[change_idx:]
     ind1_np_locs = np.setdiff1d(df.index.values,
                                 np.concatenate((ind1_rp_locs, ind1_pp_locs)))
+    ind1_np_locs_pre = ind1_np_locs[0:change_idx]
+    ind1_np_locs_post = ind1_np_locs[change_idx:]
 
     # Get ind2 positions
     ind2_x = df.ind2_body_right_top_x
@@ -191,6 +245,8 @@ for i, h5 in enumerate(h5s):
     random.seed(r)
     ind2_x[ind2_nans] = (
         random.choices(ind2_x2sample.values, k=len(np.where(np.isnan(ind2_x))[0])))
+    ind2_x_pre = ind2_x[0:change_idx]
+    ind2_x_post = ind2_x[change_idx:]
 
     ind2_y = df.ind2_body_right_top_y
     ind2_y[np.isnan(ind2_y)] = df.ind2_body_right_bottom_y[np.isnan(ind2_y)]
@@ -200,24 +256,43 @@ for i, h5 in enumerate(h5s):
     random.seed(r)
     ind2_y[np.isnan(ind2_y)] = (
         random.choices(ind2_y2sample.values, k=len(np.where(np.isnan(ind2_y))[0])))
+    ind2_y_pre = ind2_y[0:change_idx]
+    ind2_y_post = ind2_y[change_idx:]
 
     ind2_dist2rp = np.sqrt(((ind2_x - rp_x) ** 2) + ((ind2_y - rp_y) ** 2))
     ind2_rp_locs = np.where(ind2_dist2rp < pix_radius_thresh)[0]
+    ind2_rp_locs_pre = ind2_rp_locs[0:change_idx]
+    ind2_rp_locs_post = ind2_rp_locs[change_idx:]
     ind2_dist2pp = np.sqrt(((ind2_x - pp_x) ** 2) + ((ind2_y - pp_y) ** 2))
     ind2_pp_locs = np.where(ind2_dist2pp < pix_radius_thresh)[0]
+    ind2_pp_locs_pre = ind2_pp_locs[0:change_idx]
+    ind2_pp_locs_post = ind2_pp_locs[change_idx:]
     ind2_np_locs = np.setdiff1d(df.index.values,
                                 np.concatenate((ind2_rp_locs, ind2_pp_locs)))
+    ind2_np_locs_pre = ind2_np_locs[0:change_idx]
+    ind2_np_locs_post = ind2_np_locs[change_idx:]
 
     fig, ax = plt.subplots(nrows=1, ncols=2)
-    sns.histplot(x=ind1_x, y=ind1_y, ax=ax[0], stat='percent', bins=30, cbar=True,
-                 cmap='autumn')
-    sns.histplot(x=ind2_x, y=ind2_y, ax=ax[1], stat='percent', bins=30, cbar=True,
-                 cmap='summer')
-    fig.suptitle(ids + f" rp={rp_id}: {rp_pel} pel; pp={pp_id}: {pp_pel} pel; "
+    sns.histplot(x=ind1_x_pre, y=ind1_y_pre, ax=ax[0], stat='percent', bins=30, 
+                 cbar=True, cmap=map1)
+    sns.histplot(x=ind2_x_pre, y=ind2_y_pre, ax=ax[1], stat='percent', bins=30, 
+                 cbar=True, cmap=map2)
+    fig.suptitle(ids + f"_pre rp={rp_id}: {rp_pel} pel; pp={pp_id}: {pp_pel} pel; "
                        f"thresh_diff: {p_diff}")
-    fig.savefig(f"/nfs/nhome/live/jbhagat/dlc_playground/de_lab_meeting"
-                f"/paired_occ_histmaps"
-                f"/{ids}.png")
+    fig.savefig(f"/nfs/winstor/delab/lab members/jai/social_analysis_figs/2d_occ_hists"
+                f"/{ids}_pre.png")
+    fig.show()
+    
+    fig, ax = plt.subplots(nrows=1, ncols=2)
+    sns.histplot(x=ind1_x_post, y=ind1_y_post, ax=ax[0], stat='percent', bins=30, 
+                 cbar=True, cmap=map1)
+    sns.histplot(x=ind2_x_post, y=ind2_y_post, ax=ax[1], stat='percent', bins=30, 
+                 cbar=True, cmap=map2)
+    fig.suptitle(ids + f"_post rp={rp_id}: {rp_pel} pel; pp={pp_id}: {pp_pel} pel; "
+                       f"thresh_diff: {p_diff}")
+    fig.savefig(f"/nfs/winstor/delab/lab members/jai/social_analysis_figs/2d_occ_hists"
+                f"/{ids}_post.png")
+    fig.show()
 
     # Get combined positions
     ind1_locs = np.zeros(len(df))
@@ -241,76 +316,170 @@ for i, h5 in enumerate(h5s):
     comb_pos = np.array(((rp_rp_p, rp_pp_p, rp_np_p), 
                         (pp_rp_p, pp_pp_p, pp_np_p),
                         (np_rp_p, np_pp_p, np_np_p)))
+    
+    comb_locs_pre = ind1_locs[0:change_idx] * ind2_locs[0:change_idx]
+    rp_rp_p_pre = len(comb_locs_pre[comb_locs_pre == 11]) / len(df[0:change_idx])
+    rp_pp_p_pre = len(comb_locs_pre[comb_locs_pre == 12]) / len(df[0:change_idx])
+    rp_np_p_pre = len(comb_locs_pre[comb_locs_pre == 13]) / len(df[0:change_idx])
+    pp_rp_p_pre = len(comb_locs_pre[comb_locs_pre == 22]) / len(df[0:change_idx])
+    pp_pp_p_pre = len(comb_locs_pre[comb_locs_pre == 24]) / len(df[0:change_idx])
+    pp_np_p_pre = len(comb_locs_pre[comb_locs_pre == 26]) / len(df[0:change_idx])
+    np_rp_p_pre = len(comb_locs_pre[comb_locs_pre == 33]) / len(df[0:change_idx])
+    np_pp_p_pre = len(comb_locs_pre[comb_locs_pre == 36]) / len(df[0:change_idx])
+    np_np_p_pre = len(comb_locs_pre[comb_locs_pre == 39]) / len(df[0:change_idx])
+    comb_pos_pre = np.array(((rp_rp_p_pre, rp_pp_p_pre, rp_np_p_pre),
+                         (pp_rp_p_pre, pp_pp_p_pre, pp_np_p_pre),
+                         (np_rp_p_pre, np_pp_p_pre, np_np_p_pre)))
+
+    comb_locs_post = ind1_locs[change_idx:] * ind2_locs[change_idx:]
+    rp_rp_p_post = len(comb_locs_post[comb_locs_post == 11]) / len(df[change_idx:])
+    rp_pp_p_post = len(comb_locs_post[comb_locs_post == 12]) / len(df[change_idx:])
+    rp_np_p_post = len(comb_locs_post[comb_locs_post == 13]) / len(df[change_idx:])
+    pp_rp_p_post = len(comb_locs_post[comb_locs_post == 22]) / len(df[change_idx:])
+    pp_pp_p_post = len(comb_locs_post[comb_locs_post == 24]) / len(df[change_idx:])
+    pp_np_p_post = len(comb_locs_post[comb_locs_post == 26]) / len(df[change_idx:])
+    np_rp_p_post = len(comb_locs_post[comb_locs_post == 33]) / len(df[change_idx:])
+    np_pp_p_post = len(comb_locs_post[comb_locs_post == 36]) / len(df[change_idx:])
+    np_np_p_post = len(comb_locs_post[comb_locs_post == 39]) / len(df[change_idx:])
+    comb_pos_post = np.array(((rp_rp_p_post, rp_pp_p_post, rp_np_p_post),
+                             (pp_rp_p_post, pp_pp_p_post, pp_np_p_post),
+                             (np_rp_p_post, np_pp_p_post, np_np_p_post)))
+    
 
     # Generate synthetic null distribution for each combo of occupancy
-    rp_rp_null_dist = np.outer(occ1[:, 0], occ2[:, 0])
-    rp_rp_null_dist = random.choices(rp_rp_null_dist.flatten(), k=100)
-    rp_pp_null_dist = np.outer(occ1[:, 0], occ2[:, 1])
-    rp_pp_null_dist = random.choices(rp_pp_null_dist.flatten(), k=100)
-    rp_np_null_dist = np.outer(occ1[:, 0], occ2[:, 2])
-    rp_np_null_dist = random.choices(rp_np_null_dist.flatten(), k=100)
-    pp_rp_null_dist = np.outer(occ1[:, 1], occ2[:, 0])
-    pp_rp_null_dist = random.choices(pp_rp_null_dist.flatten(), k=100)
-    pp_pp_null_dist = np.outer(occ1[:, 1], occ2[:, 1])
-    pp_pp_null_dist = random.choices(pp_pp_null_dist.flatten(), k=100)
-    pp_np_null_dist = np.outer(occ1[:, 1], occ2[:, 2])
-    pp_np_null_dist = random.choices(pp_np_null_dist.flatten(), k=100)
-    np_rp_null_dist = np.outer(occ1[:, 2], occ2[:, 0])
-    np_rp_null_dist = random.choices(np_rp_null_dist.flatten(), k=100)
-    np_pp_null_dist = np.outer(occ1[:, 2], occ2[:, 1])
-    np_pp_null_dist = random.choices(np_pp_null_dist.flatten(), k=100)
-    np_np_null_dist = np.outer(occ1[:, 2], occ2[:, 2])
-    np_np_null_dist = random.choices(np_np_null_dist.flatten(), k=100)
-    all_dists = np.array((
-        (rp_rp_null_dist),
-        (rp_pp_null_dist),
-        (rp_np_null_dist),
-        (pp_rp_null_dist),
-        (pp_pp_null_dist),
-        (pp_np_null_dist),
-        (np_rp_null_dist),
-        (np_pp_null_dist),
-        (np_np_null_dist),
+    rp_rp_null_dist_pre = np.outer(occ1_pre[:, 0], occ2_pre[:, 0])
+    rp_rp_null_dist_pre = random.choices(rp_rp_null_dist_pre.flatten(), k=100)
+    rp_pp_null_dist_pre = np.outer(occ1_pre[:, 0], occ2_pre[:, 1])
+    rp_pp_null_dist_pre = random.choices(rp_pp_null_dist_pre.flatten(), k=100)
+    rp_np_null_dist_pre = np.outer(occ1_pre[:, 0], occ2_pre[:, 2])
+    rp_np_null_dist_pre = random.choices(rp_np_null_dist_pre.flatten(), k=100)
+    pp_rp_null_dist_pre = np.outer(occ1_pre[:, 1], occ2_pre[:, 0])
+    pp_rp_null_dist_pre = random.choices(pp_rp_null_dist_pre.flatten(), k=100)
+    pp_pp_null_dist_pre = np.outer(occ1_pre[:, 1], occ2_pre[:, 1])
+    pp_pp_null_dist_pre = random.choices(pp_pp_null_dist_pre.flatten(), k=100)
+    pp_np_null_dist_pre = np.outer(occ1_pre[:, 1], occ2_pre[:, 2])
+    pp_np_null_dist_pre = random.choices(pp_np_null_dist_pre.flatten(), k=100)
+    np_rp_null_dist_pre = np.outer(occ1_pre[:, 2], occ2_pre[:, 0])
+    np_rp_null_dist_pre = random.choices(np_rp_null_dist_pre.flatten(), k=100)
+    np_pp_null_dist_pre = np.outer(occ1_pre[:, 2], occ2_pre[:, 1])
+    np_pp_null_dist_pre = random.choices(np_pp_null_dist_pre.flatten(), k=100)
+    np_np_null_dist_pre = np.outer(occ1_pre[:, 2], occ2_pre[:, 2])
+    np_np_null_dist_pre = random.choices(np_np_null_dist_pre.flatten(), k=100)
+    all_dists_pre = np.array((
+        (rp_rp_null_dist_pre),
+        (rp_pp_null_dist_pre),
+        (rp_np_null_dist_pre),
+        (pp_rp_null_dist_pre),
+        (pp_pp_null_dist_pre),
+        (pp_np_null_dist_pre),
+        (np_rp_null_dist_pre),
+        (np_pp_null_dist_pre),
+        (np_np_null_dist_pre),
     ))
-    all_dists = all_dists.transpose()
+    all_dists_pre = all_dists_pre.transpose()
+
+    rp_rp_null_dist_post = np.outer(occ1_post[:, 0], occ2_post[:, 0])
+    rp_rp_null_dist_post = random.choices(rp_rp_null_dist_post.flatten(), k=100)
+    rp_pp_null_dist_post = np.outer(occ1_post[:, 0], occ2_post[:, 1])
+    rp_pp_null_dist_post = random.choices(rp_pp_null_dist_post.flatten(), k=100)
+    rp_np_null_dist_post = np.outer(occ1_post[:, 0], occ2_post[:, 2])
+    rp_np_null_dist_post = random.choices(rp_np_null_dist_post.flatten(), k=100)
+    pp_rp_null_dist_post = np.outer(occ1_post[:, 1], occ2_post[:, 0])
+    pp_rp_null_dist_post = random.choices(pp_rp_null_dist_post.flatten(), k=100)
+    pp_pp_null_dist_post = np.outer(occ1_post[:, 1], occ2_post[:, 1])
+    pp_pp_null_dist_post = random.choices(pp_pp_null_dist_post.flatten(), k=100)
+    pp_np_null_dist_post = np.outer(occ1_post[:, 1], occ2_post[:, 2])
+    pp_np_null_dist_post = random.choices(pp_np_null_dist_post.flatten(), k=100)
+    np_rp_null_dist_post = np.outer(occ1_post[:, 2], occ2_post[:, 0])
+    np_rp_null_dist_post = random.choices(np_rp_null_dist_post.flatten(), k=100)
+    np_pp_null_dist_post = np.outer(occ1_post[:, 2], occ2_post[:, 1])
+    np_pp_null_dist_post = random.choices(np_pp_null_dist_post.flatten(), k=100)
+    np_np_null_dist_post = np.outer(occ1_post[:, 2], occ2_post[:, 2])
+    np_np_null_dist_post = random.choices(np_np_null_dist_post.flatten(), k=100)
+    all_dists_post = np.array((
+        (rp_rp_null_dist_post),
+        (rp_pp_null_dist_post),
+        (rp_np_null_dist_post),
+        (pp_rp_null_dist_post),
+        (pp_pp_null_dist_post),
+        (pp_np_null_dist_post),
+        (np_rp_null_dist_post),
+        (np_pp_null_dist_post),
+        (np_np_null_dist_post),
+    ))
+    all_dists_post = all_dists_post.transpose()
+    
     titles = ['rp-rp', 'rp-pp', 'rp-np', 'pp-rp', 'pp-pp', 'pp-np', 'np-rp', 'np-pp',
               'np-np']
     # 1-d dist plots
     fig, axs = plt.subplots(nrows=3, ncols=3)
     for occ_idx in range(9):
         ax = axs.flatten()[occ_idx]
-        tru_val = comb_pos.flatten()[occ_idx].round(4)
-        sns.histplot(all_dists[:, occ_idx], bins=25, kde=True, ax=ax, fill=True)
+        tru_val = comb_pos_pre.flatten()[occ_idx].round(4)
+        sns.histplot(all_dists_pre[:, occ_idx], bins=25, kde=True, ax=ax, fill=True)
         vh = ax.axvline(x=tru_val, ymax=ax.get_ylim()[1], color='m')
         ax.set_title(titles[occ_idx])
         ax.set_ylabel('')
         # ax.legend([vh], ['syn_null_dist', f'actual={tru_val}'])
     axs[2, 0].set_xlabel('P[x]')
     axs[2, 0].set_ylabel('Count')
-    fig.suptitle(ids + f" rp={rp_id}: {rp_pel} pel; pp={pp_id}: {pp_pel} pel; "
+    fig.suptitle(ids + f"_pre rp={rp_id}: {rp_pel} pel; pp={pp_id}: {pp_pel} pel; "
                        f"thresh_diff: {p_diff}")
-    fig.savefig(f"/nfs/nhome/live/jbhagat/dlc_playground/de_lab_meeting/1d_occ_dists"
-                f"/{ids}.png")
+    fig.savefig(f"/nfs/winstor/delab/lab members/jai/social_analysis_figs/1d_occ_dists/"
+                f"/{ids}_pre.png")
     fig.show()
-    all_dists_df = pd.DataFrame(all_dists)
-    all_dists_df.columns = titles
-    emp_vs_syn = pd.Series()
-    all_dists_df['emp_vs_syn'] = 'syn'
-    # add empirical data
-    all_dists_df = all_dists_df.append(pd.Series(comb_pos.flatten(), index=titles),
-                                       ignore_index=True)
-    all_dists_df.emp_vs_syn.iloc[-1] = 'emp'
-    fig_pp = sns.pairplot(all_dists_df, hue="emp_vs_syn")
-    fig_pp.fig.suptitle(ids + f" rp={rp_id}: {rp_pel} pel; pp={pp_id}: {pp_pel} pel; "
-                              f"thresh_diff: {p_diff}")
-    fig_pp.savefig(f"/nfs/nhome/live/jbhagat/dlc_playground/de_lab_meeting"
-                   f"/sns_pairplots/{ids}.png")
-    
 
-    len(np.where(np.logical_and(np.logical_and(np.isnan(df.ind1_body_right_bottom_x),
-                                               np.isnan(df.ind1_body_right_top_x)),
-                                np.logical_and(np.isnan(df.ind1_neck_base_x),
-                                               np.isnan(df.ind1_tail_base_x))))[0])
+    fig, axs = plt.subplots(nrows=3, ncols=3)
+    for occ_idx in range(9):
+        ax = axs.flatten()[occ_idx]
+        tru_val = comb_pos_post.flatten()[occ_idx].round(4)
+        sns.histplot(all_dists_post[:, occ_idx], bins=25, kde=True, ax=ax, fill=True)
+        vh = ax.axvline(x=tru_val, ymax=ax.get_ylim()[1], color='m')
+        ax.set_title(titles[occ_idx])
+        ax.set_ylabel('')
+        # ax.legend([vh], ['syn_null_dist', f'actual={tru_val}'])
+    axs[2, 0].set_xlabel('P[x]')
+    axs[2, 0].set_ylabel('Count')
+    fig.suptitle(ids + f"_post rp={rp_id}: {rp_pel} pel; pp={pp_id}: {pp_pel} pel; "
+                       f"thresh_diff: {p_diff}")
+    fig.savefig(f"/nfs/winstor/delab/lab members/jai/social_analysis_figs/1d_occ_dists/"
+                f"/{ids}_post.png")
+    fig.show()
+
+    # Pairplots
+    all_dists_df_pre = pd.DataFrame(all_dists_pre)
+    all_dists_df_pre.columns = titles
+    emp_vs_syn = pd.Series()
+    all_dists_df_pre['emp_vs_syn'] = 'syn'
+    # add empirical data
+    all_dists_df_pre = all_dists_df_pre.append(pd.Series(comb_pos_pre.flatten(),
+                                                     index=titles),
+                                       ignore_index=True)
+    all_dists_df_pre.emp_vs_syn.iloc[-1] = 'emp'
+    fig_pp = sns.pairplot(all_dists_df_pre, hue="emp_vs_syn")
+    fig_pp.fig.suptitle(ids + f"_pre rp={rp_id}: {rp_pel} pel; pp={pp_id}: {pp_pel} "
+                              f"pel; thresh_diff: {p_diff}")
+    fig_pp.savefig(f"/nfs/winstor/delab/lab members/jai/social_analysis_figs/pairplots/"
+                f"/{ids}_pre.png")
+    fig_pp.fig.show()
+
+    all_dists_df_post = pd.DataFrame(all_dists_post)
+    all_dists_df_post.columns = titles
+    emp_vs_syn = pd.Series()
+    all_dists_df_post['emp_vs_syn'] = 'syn'
+    # add empirical data
+    all_dists_df_post = all_dists_df_post.append(pd.Series(comb_pos_post.flatten(),
+                                                         index=titles),
+                                               ignore_index=True)
+    all_dists_df_post.emp_vs_syn.iloc[-1] = 'emp'
+    fig_pp = sns.pairplot(all_dists_df_post, hue="emp_vs_syn")
+    fig_pp.fig.suptitle(ids + f"_post rp={rp_id}: {rp_pel} pel; pp={pp_id}: {pp_pel} "
+                              f"pel; thresh_diff: {p_diff}")
+    fig_pp.savefig(f"/nfs/winstor/delab/lab members/jai/social_analysis_figs/pairplots/"
+                   f"/{ids}_post.png")
+    fig_pp.fig.show()
+
+
 #     find animal ids corresponding to social sessions
 #         for zipped list of occupancy hists with those animal ids
 #             uniformly randomly sample each list
