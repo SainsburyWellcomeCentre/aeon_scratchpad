@@ -1,9 +1,9 @@
 import cv2
 import numpy as np
 import pandas as pd
-from aeon.analyze.movies import *
-from aeon.analyze.patches import *
-from aeon.util.plotting import *
+from aeon.analysis.movies import *
+from aeon.analysis.utils import *
+from aeon.analysis.plotting import *
 import aeon.io.api as aeon
 import aeon.io.video as video
 import matplotlib.pyplot as plt
