@@ -31,7 +31,7 @@ plt.rcParams['figure.dpi'] = 200
 
 # <s Get session metadata
 
-exp_root = '/nfs/winstor/delab/data/arena0.1/socialexperiment0'
+exp_root = '/nfs/winstor/delab/data/arena0.1/socialexperiment0_raw'
 session_metadata = helpers.loadSessions(exp_root)
 start_ts = pd.Timestamp('2022-01-16')
 end_ts = pd.Timestamp('2022-02-11')
@@ -56,7 +56,7 @@ pix_radius_thresh = 180
 
 # Craft occupancy arrays for each individual
 n_ind_ses = 7
-n_occ_locs = 3  # (rp, pp, n)
+n_occ_locs = 3  # (rp, pp, np)
 occ_704 = np.zeros((n_ind_ses, n_occ_locs))
 occ_704_pre = np.zeros((n_ind_ses, n_occ_locs))
 occ_704_post = np.zeros((n_ind_ses, n_occ_locs))
@@ -69,6 +69,8 @@ occ_706 = np.zeros((n_ind_ses, n_occ_locs))
 occ_706_pre = np.zeros((n_ind_ses, n_occ_locs))
 occ_706_post = np.zeros((n_ind_ses, n_occ_locs))
 ses_ct_706 = 0
+
+# Individual session analysis
 for s in session_metadata.itertuples():
     # Skip social sessions.
     if ";" in s.id:
@@ -83,12 +85,15 @@ for s in session_metadata.itertuples():
         rp_x, rp_y = p2_x, p2_y
         pp_x, pp_y = p1_x, p1_y
     pos = api.positiondata(exp_root, start=s.start, end=s.end)
-    pos = pos[pos.id == 0.0]
-    pos = pos[~np.isnan(pos.x)]
+    pos = pos[pos.id == 0.0]  # look at id 0 only b/c we don't care for duplicate ts
+    pos = pos[~np.isnan(pos.x)]  # very rarely nans occur in bonsai tracking: throwaway
     both_patch_data = pd.concat([p1_patch_data, p2_patch_data])
     change_ts = (
         both_patch_data.iloc[np.where(np.diff(both_patch_data.threshold))[0][0]].name)
 
+    # *Note*: there should be a function with arguments (timestamp,
+    # mouse position, arena roi position) that given a timestamp, calculates the
+    # distance of any mouse to any specified location
     change_idx = (change_ts - s.start).seconds * 50
     dist2rp = np.sqrt( ((pos.x - rp_x) ** 2) + ((pos.y - rp_y) ** 2) )
     rp_p = len(np.where(dist2rp < pix_radius_thresh)[0]) / len(pos)
@@ -272,7 +277,9 @@ for i, h5 in enumerate(h5s):
     ind2_np_locs_pre = ind2_np_locs[0:change_idx]
     ind2_np_locs_post = ind2_np_locs[change_idx:]
 
+    # Create 2d occupancy histogram plots
     fig, ax = plt.subplots(nrows=1, ncols=2)
+    # Change binsizes for these so that its proportional to x and y pixels
     sns.histplot(x=ind1_x_pre, y=ind1_y_pre, ax=ax[0], stat='percent', bins=30, 
                  cbar=True, cmap=map1)
     sns.histplot(x=ind2_x_pre, y=ind2_y_pre, ax=ax[1], stat='percent', bins=30, 
