@@ -322,6 +322,7 @@ for i, col in enumerate(cols):
         wheel_subject_abs.add_trace(
             go.Box(
                 y=df[df["id"] == uid][col],
+                x=[col] * len(df[df["id"] == uid][col]),
                 name=f"{uid}",
                 legendgroup=uid,
                 showlegend=(col == cols[0]),
@@ -357,6 +358,7 @@ for i, col in enumerate(cols):
         wheel_subject_norm.add_trace(
             go.Box(
                 y=df[df["id"] == uid][col],
+                x=[col] * len(df[df["id"] == uid][col]),
                 name=f"{uid}",
                 legendgroup=uid,
                 showlegend=(col == cols[0]),
@@ -481,6 +483,7 @@ for i, col in enumerate(cols):
         pellet_subject_abs.add_trace(
             go.Box(
                 y=df[df["id"] == uid][col],
+                x=[col] * len(df[df["id"] == uid][col]),
                 name=f"{uid}",
                 legendgroup=uid,
                 showlegend=(col == cols[0]),
@@ -516,6 +519,7 @@ for i, col in enumerate(cols):
         pellet_subject_norm.add_trace(
             go.Box(
                 y=df[df["id"] == uid][col],
+                x=[col] * len(df[df["id"] == uid][col]),
                 name=f"{uid}",
                 legendgroup=uid,
                 showlegend=(col == cols[0]),
@@ -580,6 +584,7 @@ for (col_idxs, col) in zip(col_idxs, cols):
         prob_pels_subject.add_trace(
             go.Box(
                 y=y,
+                x=[col] * len(df[df["id"] == uid][col]),
                 name=f"{uid}",
                 legendgroup=uid,
                 showlegend=(col == cols[0]),
@@ -1137,4 +1142,4 @@ app.layout = html.Div(
 
 
 if __name__ == "__main__":
-    app.run_server(host="0.0.0.0", port="7777", debug=True)
+    app.run_server(host="0.0.0.0", port="7779", debug=True)
