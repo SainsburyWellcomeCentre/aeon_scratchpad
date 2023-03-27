@@ -1,6 +1,7 @@
 """Creates a Dash dashboard for the presocial sessions"""
 
 from pathlib import Path
+from itertools import product
 
 import dash
 import dash_daq as daq
@@ -227,7 +228,7 @@ df["tot_wheel"] = (
     + df["tot_pre_wheel"]
     + df["tot_post_wheel"]
 )
-uids = df["id"].unique()
+uids = np.sort(df["id"].unique())
 markers = [
     "circle",
     "square",
@@ -334,8 +335,8 @@ wheel_subject_abs.update_layout(
     title="Wheel Distance Spun (Absolute) by Subject",
     xaxis=dict(
         tickmode="array",
-        tickvals=cols,
-        ticktext=cols,
+        tickvals=uids,
+        ticktext=uids,
     ),
     yaxis_title="Distance Spun (cm)",
     legend_title="Wheel Distances",
@@ -369,8 +370,8 @@ wheel_subject_norm.update_layout(
     title="Wheel Distance Spun (Normalized) by Subject",
     xaxis=dict(
         tickmode="array",
-        tickvals=cols,
-        ticktext=cols,
+        tickvals=uids,
+        ticktext=uids,
     ),
     yaxis_title="Distance Spun (a.u. 0-1)",
     legend_title="Wheel Distances",
@@ -493,8 +494,8 @@ pellet_subject_abs.update_layout(
     title="Pellets by Subject",
     xaxis=dict(
         tickmode="array",
-        tickvals=cols,
-        ticktext=cols,
+        tickvals=uids,
+        ticktext=uids,
     ),
     yaxis_title="Pellets",
     legend_title="Divisions",
@@ -528,8 +529,8 @@ pellet_subject_norm.update_layout(
     title="Pellets by Subject",
     xaxis=dict(
         tickmode="array",
-        tickvals=cols,
-        ticktext=cols,
+        tickvals=uids,
+        ticktext=uids,
     ),
     yaxis_title="Pellets (a.u. 0-1)",
     legend_title="Divisions",
@@ -544,8 +545,8 @@ for uid in uids:
         if not len(df[df["id"] == uid][col]):  # skip empty
             continue
         if len(df[df["id"] == uid][col]) > 1:
-            y = np.concatenate(df[df["id"] == uid][col])
-            x = np.concatenate(df[df["id"] == uid][idx_col])
+            y = np.concatenate(df[df["id"] == uid][col].tolist())
+            x = np.concatenate(df[df["id"] == uid][idx_col].tolist())
         else:
             y = df[df["id"] == uid][col].values[0]
             x = df[df["id"] == uid][idx_col].values[0]
@@ -555,12 +556,25 @@ for uid in uids:
                 y=y,
                 mode="lines+markers",
                 marker={"symbol": markers[idx], "size": mrkr_sz},
-                name=f"{col}",
-                legendgroup=col,
-                showlegend=(uid == uids[0]),
+                name=f"{uid}: {col}",
+                #legendgroup=col,
+                #showlegend=(uid == uids[0]),
                 line=dict(color=color_dict[uid]),
             )
         )
+# for uid in uids:
+#     # dummy trace for `uid` in legend
+#     prob_pels_session.add_trace(
+#         go.Scatter(
+#             x=[None],
+#             y=[None],
+#             mode='none',
+#             showlegend=True,
+#             name=uid,
+#             legendgroup=uid,
+#             line=dict(color=color_dict[uid])
+#         )
+#     )
 prob_pels_session.update_layout(
     title="Threshold Values During Probabilistic Period",
     xaxis_title="Datetime",
@@ -568,33 +582,38 @@ prob_pels_session.update_layout(
     legend_title="Divisions",
 )
 
+cols = ["post_easy_pel_thresh", "post_hard_pel_thresh"]
+col_idxs = ["post_easy_pel_thresh_idx", "post_hard_pel_thresh_idx"]
 prob_pels_subject = go.Figure()
-for (col_idxs, col) in zip(col_idxs, cols):
-    for uid in uids:
+x_positions = []
+for j, uid in enumerate(uids):
+    for i, (col_idx, col) in enumerate(zip(col_idxs, cols)):
         if not len(df[df["id"] == uid][col]):  # skip empty
             continue
         if len(df[df["id"] == uid][col]) > 1:
-            y = np.concatenate(df[df["id"] == uid][col])
+            y = np.concatenate(df[df["id"] == uid][col].tolist())
         else:
             y = df[df["id"] == uid][col].values[0]
+        xpos = i + j * (len(cols) + 0.5)
+        x_positions.append(xpos)
         prob_pels_subject.add_trace(
             go.Box(
                 y=y,
-                name=f"{uid}",
-                legendgroup=uid,
-                showlegend=(col == cols[0]),
+                x=[xpos] * len(y),
+                name=f"{uid} {col}",
                 boxpoints="all",
                 pointpos=-1.5,
                 jitter=0.1,
                 line=dict(color=color_dict[uid]),
             )
         )
+xlabels = [" ".join(combo) for combo in list(product(uids, cols))]
 prob_pels_subject.update_layout(
     title="Threshold Values Distributions During Probabilistic Period",
     xaxis=dict(
         tickmode="array",
-        tickvals=cols,
-        ticktext=cols,
+        tickvals=x_positions,
+        ticktext=xlabels,
     ),
     yaxis_title="Distance (cm)",
     legend_title="Divisions",
@@ -1051,7 +1070,12 @@ app.layout = html.Div(
                                         "backgroundColor": tab_bg_col,
                                         "color": tab_txt_col,
                                     },
-                                    children=[dcc.Graph(figure=prob_pels_session)],
+                                    children=[
+                                        dcc.Graph(
+                                            figure=prob_pels_session,
+                                            id="prob_pels_session",
+                                        ),
+                                    ],
                                 ),
                                 dcc.Tab(
                                     id="prob_pels_subject_tab",
@@ -1071,6 +1095,29 @@ app.layout = html.Div(
         ),
     ],
 )
+
+
+# @app.callback(
+#     Output("prob_pels_session", "figure"),
+#     Input("prob_pels_session", "relayoutData"),
+#     State("prob_pels_session", "figure"),
+# )
+# def update_trace_visibility(relayout_data, figure):
+#     if relayout_data is None:
+#         raise dash.exceptions.PreventUpdate
+#     if 'legendgroup' not in str(relayout_data):
+#         raise dash.exceptions.PreventUpdate
+#     pdb.set_trace()
+#     clicked_legend = list(relayout_data.keys())[0]
+#     clicked_status = relayout_data[clicked_legend]
+#     clicked_uid = clicked_legend.split('.')[0]
+#     new_traces = []
+#     for trace in figure['data']:
+#         if trace['legendgroup'].startswith(clicked_uid):
+#             trace['visible'] = clicked_status
+#         new_traces.append(trace)
+#     figure['data'] = new_traces
+#     return figure
 
 # Commenting out potential color picker callbacks for now
 # Option 1:
