@@ -17,7 +17,7 @@ from dash import Dash, dash_table, dcc, html
 from dash.dependencies import Input, Output, State, ClientsideFunction
 from dash.development.base_component import ComponentRegistry
 
-from aeon_analysis.presocial.dash import helpers
+from aeon_analysis.presocial.presocial_dash import helpers
 
 
 # Load presocial session data
@@ -87,6 +87,7 @@ data_table = dash_table.DataTable(
         "minWidth": table_min_width,
     },
     fixed_columns={"headers": True, "data": 2},
+    fixed_rows={"headers": True},
     style_header={"fontWeight": "bold", "backgroundColor": plt_bg_col},
     style_cell={
         "backgroundColor": plt_bg_col,
@@ -94,6 +95,7 @@ data_table = dash_table.DataTable(
         "textAlign": "left",
         "whiteSpace": "normal",
         "height": "auto",
+        "minWidth": 190,
     },
 )
 pd.options.mode.chained_assignment = "warn"
@@ -262,6 +264,7 @@ for idx, col in enumerate(cols):
                 name=f"{col}",
                 legendgroup=col,
                 showlegend=(uid == uids[0]),
+                line=dict(color=color_dict[uid]),
             )
         )
 wheel_session_abs.update_layout(
@@ -297,6 +300,7 @@ for idx, col in enumerate(cols):
                 name=f"{col}",
                 legendgroup=col,
                 showlegend=(uid == uids[0]),
+                line=dict(color=color_dict[uid]),
             )
         )
 wheel_session_norm.update_layout(
@@ -318,25 +322,32 @@ cols = [
     "tot_post_wheel",
     "tot_wheel",
 ]
-for i, col in enumerate(cols):
-    for uid in uids:
+x_positions = []
+for j, uid in enumerate(uids):
+    for i, col in enumerate(cols):
+        xpos = i + j * (len(cols) + 0.5)
+        x_positions.append(xpos)
+        y = df[df["id"] == uid][col].tolist()
         wheel_subject_abs.add_trace(
             go.Box(
-                y=df[df["id"] == uid][col],
-                name=f"{uid}",
-                legendgroup=uid,
-                showlegend=(col == cols[0]),
+                y=y,
+                x=[xpos] * len(y),
+                name=f"{col}",
+                legendgroup=col,
+                showlegend=(uid == uids[0]),
                 boxpoints="all",
                 pointpos=-1.5,
                 jitter=0.1,
+                line=dict(color=color_dict[uid]),
             )
         )
+xlabels = [" ".join(combo) for combo in list(product(uids, cols))]
 wheel_subject_abs.update_layout(
     title="Wheel Distance Spun (Absolute) by Subject",
     xaxis=dict(
         tickmode="array",
-        tickvals=uids,
-        ticktext=uids,
+        tickvals=x_positions,
+        ticktext=xlabels,
     ),
     yaxis_title="Distance Spun (cm)",
     legend_title="Wheel Distances",
@@ -353,25 +364,31 @@ cols = [
     "hard_pref",
     "easy_pref",
 ]
-for i, col in enumerate(cols):
-    for uid in uids:
+x_positions = []
+for j, uid in enumerate(uids):
+    for i, col in enumerate(cols):
+        xpos = i + j * (len(cols) + 0.5)
+        x_positions.append(xpos)
+        y = df[df["id"] == uid][col].tolist()
         wheel_subject_norm.add_trace(
             go.Box(
-                y=df[df["id"] == uid][col],
-                name=f"{uid}",
-                legendgroup=uid,
-                showlegend=(col == cols[0]),
+                y=y,
+                x=[xpos] * len(y),
+                name=f"{col}",
+                legendgroup=col,
+                showlegend=(uid == uids[0]),
                 boxpoints="all",
                 pointpos=-1.5,
                 jitter=0.1,
+                line=dict(color=color_dict[uid]),
             )
         )
 wheel_subject_norm.update_layout(
     title="Wheel Distance Spun (Normalized) by Subject",
     xaxis=dict(
         tickmode="array",
-        tickvals=uids,
-        ticktext=uids,
+        tickvals=x_positions,
+        ticktext=xlabels,
     ),
     yaxis_title="Distance Spun (a.u. 0-1)",
     legend_title="Wheel Distances",
@@ -411,6 +428,7 @@ for idx, col in enumerate(cols):
                 name=f"{col}",
                 legendgroup=col,
                 showlegend=(uid == uids[0]),
+                line=dict(color=color_dict[uid]),
             )
         )
 pellet_session_abs.update_layout(
@@ -456,6 +474,7 @@ for idx, col in enumerate(cols):
                 name=f"{col}",
                 legendgroup=col,
                 showlegend=(uid == uids[0]),
+                line=dict(color=color_dict[uid]),
             )
         )
 pellet_session_norm.update_layout(
@@ -477,25 +496,31 @@ cols = [
     "tot_post_n_pel",
     "tot_n_pel",
 ]
-for i, col in enumerate(cols):
-    for uid in uids:
+x_positions = []
+for j, uid in enumerate(uids):
+    for i, col in enumerate(cols):
+        xpos = i + j * (len(cols) + 0.5)
+        x_positions.append(xpos)
+        y = df[df["id"] == uid][col].tolist()
         pellet_subject_abs.add_trace(
             go.Box(
-                y=df[df["id"] == uid][col],
-                name=f"{uid}",
-                legendgroup=uid,
-                showlegend=(col == cols[0]),
+                y=y,
+                x=[xpos] * len(y),
+                name=f"{col}",
+                legendgroup=col,
+                showlegend=(uid == uids[0]),
                 boxpoints="all",
                 pointpos=-1.5,
                 jitter=0.1,
+                line=dict(color=color_dict[uid]),
             )
         )
 pellet_subject_abs.update_layout(
     title="Pellets by Subject",
     xaxis=dict(
         tickmode="array",
-        tickvals=uids,
-        ticktext=uids,
+        tickvals=x_positions,
+        ticktext=xlabels,
     ),
     yaxis_title="Pellets",
     legend_title="Divisions",
@@ -512,25 +537,31 @@ cols = [
     "hard_pel_pref",
     "easy_pel_pref",
 ]
-for i, col in enumerate(cols):
-    for uid in uids:
+x_positions = []
+for j, uid in enumerate(uids):
+    for i, col in enumerate(cols):
+        xpos = i + j * (len(cols) + 0.5)
+        x_positions.append(xpos)
+        y = df[df["id"] == uid][col].tolist()
         pellet_subject_norm.add_trace(
             go.Box(
-                y=df[df["id"] == uid][col],
-                name=f"{uid}",
-                legendgroup=uid,
-                showlegend=(col == cols[0]),
+                y=y,
+                x=[xpos] * len(y),
+                name=f"{col}",
+                legendgroup=col,
+                showlegend=(uid == uids[0]),
                 boxpoints="all",
                 pointpos=-1.5,
                 jitter=0.1,
+                line=dict(color=color_dict[uid]),
             )
         )
 pellet_subject_norm.update_layout(
     title="Pellets by Subject",
     xaxis=dict(
         tickmode="array",
-        tickvals=uids,
-        ticktext=uids,
+        tickvals=x_positions,
+        ticktext=xlabels,
     ),
     yaxis_title="Pellets (a.u. 0-1)",
     legend_title="Divisions",
@@ -582,9 +613,9 @@ prob_pels_session.update_layout(
     legend_title="Divisions",
 )
 
+prob_pels_subject = go.Figure()
 cols = ["post_easy_pel_thresh", "post_hard_pel_thresh"]
 col_idxs = ["post_easy_pel_thresh_idx", "post_hard_pel_thresh_idx"]
-prob_pels_subject = go.Figure()
 x_positions = []
 for j, uid in enumerate(uids):
     for i, (col_idx, col) in enumerate(zip(col_idxs, cols)):
@@ -1184,4 +1215,4 @@ app.layout = html.Div(
 
 
 if __name__ == "__main__":
-    app.run_server(host="0.0.0.0", port="7777", debug=True)
+    app.run_server(host="0.0.0.0", port="7777", debug=True, dev_tools_hot_reload=True)
