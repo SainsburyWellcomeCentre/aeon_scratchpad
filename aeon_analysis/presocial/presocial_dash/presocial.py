@@ -16,6 +16,7 @@ import seaborn as sns
 from dash import Dash, dash_table, dcc, html
 from dash.dependencies import Input, Output, State, ClientsideFunction
 from dash.development.base_component import ComponentRegistry
+from dotmap import DotMap
 
 from aeon_analysis.presocial.presocial_dash import helpers
 
@@ -68,6 +69,8 @@ fig_names = [
     "pellet_subject_norm",
     "prob_pels_session",
     "prob_pels_subject",
+    "patch_pref_epoch_session",
+    "cum_patch_pref_epoch_session",
 ]
 tab_names = []
 
@@ -100,8 +103,9 @@ data_table = dash_table.DataTable(
 )
 pd.options.mode.chained_assignment = "warn"
 
+
 # 2. Weight Viz
-df = df.sort_values("id")
+df = df.sort_values(by=["id", "enter"])
 weight_diff = df["weight_exit"] - df["weight_enter"]
 weight_enter_session = px.line(
     df,
@@ -219,6 +223,88 @@ hard_patch_subject = px.histogram(
 )
 
 # 5. Wheel Viz
+patch_pref_epoch_session = go.Figure()
+sesh_subj_counter = DotMap(
+    {
+        "BAA-1103045": 0,
+        "BAA-1103047": 0,
+        "BAA-1103048": 0,
+        "BAA-1103049": 0,
+        "BAA-1103050": 0,
+    }
+)
+for i in df.index:
+    uid = df["id"][i]
+    y = df["easy_pref_epoch"][i]
+    sesh_subj_counter[uid] += 1
+    patch_pref_epoch_session.add_trace(
+        go.Scatter(
+            y=y,
+            name=f"{uid}: {sesh_subj_counter[uid]}",
+            mode="lines+markers",
+            marker={"size": mrkr_sz},
+            line=dict(color=color_dict[uid]),
+        )
+    )
+    zidx = int(df["epoch_thresh_change_idx"][i])
+    patch_pref_epoch_session.add_trace(
+        go.Scatter(
+            x=np.array((zidx, zidx + 1)),
+            y=y[zidx: zidx + 2],
+            mode="lines+markers",
+            marker={"size": mrkr_sz},
+            line=dict(color="black"),
+            name=f"{uid}: {sesh_subj_counter[uid]}: thresh change",
+        )
+    )
+patch_pref_epoch_session.update_layout(
+    title="Patch Preference by Distance Quantile within Session",
+    xaxis_title="Distance Quantile",
+    yaxis_title="Easy Patch Preference",
+    legend_title="Session",
+)
+
+cum_patch_pref_epoch_session = go.Figure()
+sesh_subj_counter = DotMap(
+    {
+        "BAA-1103045": 0,
+        "BAA-1103047": 0,
+        "BAA-1103048": 0,
+        "BAA-1103049": 0,
+        "BAA-1103050": 0,
+    }
+)
+for i in df.index:
+    uid = df["id"][i]
+    y = df["easy_pref_epoch_cum"][i]
+    sesh_subj_counter[uid] += 1
+    cum_patch_pref_epoch_session.add_trace(
+        go.Scatter(
+            y=y,
+            name=f"{uid}: {sesh_subj_counter[uid]}",
+            mode="lines+markers",
+            marker={"size": mrkr_sz},
+            line=dict(color=color_dict[uid]),
+        )
+    )
+    zidx = int(df["epoch_thresh_change_idx"][i])
+    cum_patch_pref_epoch_session.add_trace(
+        go.Scatter(
+            x=np.array((zidx, zidx + 1)),
+            y=y[zidx: zidx + 2],
+            mode="lines+markers",
+            marker={"size": mrkr_sz},
+            line=dict(color="black"),
+            name=f"{uid}: {sesh_subj_counter[uid]}: thresh change",
+        )
+    )
+cum_patch_pref_epoch_session.update_layout(
+    title="Cumulative Patch Preference by Distance Quantile within Session",
+    xaxis_title="Distance Quantile",
+    yaxis_title="Easy Patch Preference",
+    legend_title="Session",
+)
+
 wheel_session_abs = go.Figure()
 df["tot_hard_wheel"] = df["pre_hard_wheel_dist"] + df["post_hard_wheel_dist"]
 df["tot_easy_wheel"] = df["pre_easy_wheel_dist"] + df["pre_hard_wheel_dist"]
@@ -857,6 +943,46 @@ app.layout = html.Div(
             id="wheel_viz_div",
             children=[
                 html.H2("Wheel Viz"),
+                dcc.Tabs(
+                    id="patch_pref_over_time_tabs",
+                    children=[
+                        dcc.Tab(
+                            id="pref_over_time_tab",
+                            label="Patch Preference Over Time within a Session",
+                            style={
+                                "backgroundColor": bg_col,
+                                "color": txt_col,
+                            },
+                            selected_style={
+                                "backgroundColor": tab_bg_col,
+                                "color": tab_txt_col,
+                            },
+                            children=[
+                                dcc.Graph(
+                                    figure=patch_pref_epoch_session,
+                                    id="patch_pref_epoch_session"),
+                            ]
+                        ),
+                        dcc.Tab(
+                            id="pref_over_time_cum_tab",
+                            label="Cumulative Patch Preference Over Time within a "
+                                  "Session",
+                            style={
+                                "backgroundColor": bg_col,
+                                "color": txt_col,
+                            },
+                            selected_style={
+                                "backgroundColor": tab_bg_col,
+                                "color": tab_txt_col,
+                            },
+                            children=[
+                                dcc.Graph(
+                                    figure=cum_patch_pref_epoch_session,
+                                    id="cum_patch_pref_epoch_session"),
+                            ]
+                        ),
+                    ],
+                ),
                 dcc.Tabs(
                     id="wheel_viz_tabs",
                     children=[
