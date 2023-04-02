@@ -40,10 +40,10 @@ table_min_width = "1200px"
 mrkr_sz = 14
 color_dict = {
     "BAA-1103045": "rgb(31, 119, 180)",
-    "BAA-1103047": "rgb(255, 127, 14)",
+    "BAA-1103047": "rgb(214, 39, 40)",
     "BAA-1103048": "rgb(44, 160, 44)",
-    "BAA-1103049": "rgb(214, 39, 40)",
-    "BAA-1103050": "rgb(148, 103, 189)",
+    "BAA-1103049": "rgb(148, 103, 189)",
+    "BAA-1103050": "rgb(255, 127, 14)",
 }
 # Set all relevant app.layout children names (for future color theme updates)
 fig_names = [
@@ -489,8 +489,6 @@ df["tot_post_n_pel"] = df["post_hard_n_pel"] + df["post_easy_n_pel"]
 df["tot_n_pel"] = (
     df["tot_hard_n_pel"]
     + df["tot_easy_n_pel"]
-    + df["tot_pre_n_pel"]
-    + df["tot_post_n_pel"]
 )
 cols = [
     "pre_easy_n_pel",
