@@ -250,7 +250,7 @@ for i in df.index:
     patch_pref_epoch_session.add_trace(
         go.Scatter(
             x=np.array((zidx, zidx + 1)),
-            y=y[zidx: zidx + 2],
+            y=y[zidx : zidx + 2],
             mode="lines+markers",
             marker={"size": mrkr_sz},
             line=dict(color="black"),
@@ -291,7 +291,7 @@ for i in df.index:
     cum_patch_pref_epoch_session.add_trace(
         go.Scatter(
             x=np.array((zidx, zidx + 1)),
-            y=y[zidx: zidx + 2],
+            y=y[zidx : zidx + 2],
             mode="lines+markers",
             marker={"size": mrkr_sz},
             line=dict(color="black"),
@@ -486,10 +486,7 @@ df["tot_hard_n_pel"] = df["pre_hard_n_pel"] + df["post_hard_n_pel"]
 df["tot_easy_n_pel"] = df["pre_easy_n_pel"] + df["pre_hard_n_pel"]
 df["tot_pre_n_pel"] = df["pre_hard_n_pel"] + df["pre_easy_n_pel"]
 df["tot_post_n_pel"] = df["post_hard_n_pel"] + df["post_easy_n_pel"]
-df["tot_n_pel"] = (
-    df["tot_hard_n_pel"]
-    + df["tot_easy_n_pel"]
-)
+df["tot_n_pel"] = df["tot_hard_n_pel"] + df["tot_easy_n_pel"]
 cols = [
     "pre_easy_n_pel",
     "pre_hard_n_pel",
@@ -672,8 +669,8 @@ for uid in uids:
                 mode="lines+markers",
                 marker={"symbol": markers[idx], "size": mrkr_sz},
                 name=f"{uid}: {col}",
-                #legendgroup=col,
-                #showlegend=(uid == uids[0]),
+                # legendgroup=col,
+                # showlegend=(uid == uids[0]),
                 line=dict(color=color_dict[uid]),
             )
         )
@@ -958,13 +955,14 @@ app.layout = html.Div(
                             children=[
                                 dcc.Graph(
                                     figure=patch_pref_epoch_session,
-                                    id="patch_pref_epoch_session"),
-                            ]
+                                    id="patch_pref_epoch_session",
+                                ),
+                            ],
                         ),
                         dcc.Tab(
                             id="pref_over_time_cum_tab",
                             label="Cumulative Patch Preference Over Time within a "
-                                  "Session",
+                            "Session",
                             style={
                                 "backgroundColor": bg_col,
                                 "color": txt_col,
@@ -976,8 +974,9 @@ app.layout = html.Div(
                             children=[
                                 dcc.Graph(
                                     figure=cum_patch_pref_epoch_session,
-                                    id="cum_patch_pref_epoch_session"),
-                            ]
+                                    id="cum_patch_pref_epoch_session",
+                                ),
+                            ],
                         ),
                     ],
                 ),
