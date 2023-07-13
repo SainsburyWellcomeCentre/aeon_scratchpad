@@ -1,0 +1,33 @@
+.Select-control {
+    background-color: #0d0d0d;
+    color: #f2f2f2;
+}
+
+.Select--single > .Select-control .Select-value, .Select-placeholder {
+    color: #f2f2f2;
+}
+
+/* .Select-option {
+    background-color: #0d0d0d;
+    color: #f2f2f2;
+} */
+
+.Select-option.is-focused {
+    background-color: #0d0d0d;
+    color: #f2f2f2;
+}
+
+.Select-option.is-selected {
+    background-color: #0d0d0d;
+    color: #f2f2f2;
+}
+
+.Select-value-label {
+    color: #f2f2f2;
+}
+
+.Select-menu-outer {
+    background-color:#0d0d0d;
+    color: #f2f2f2;
+}
+/* */
