@@ -238,7 +238,7 @@ hard_patch_subject = px.histogram(
 
 # a. Session pref over time
 # b. Session pref over distance
-# c. Subject pref over distance 
+# c. Subject pref over distance
 # d. Subject pref over time
 
 # Get unique ID-thresh sessions
@@ -418,7 +418,7 @@ for j, id_thresh in enumerate(df_uniq_id_thresh.itertuples()):
         ttl_avg[uniq_id_thresh_tits[j]] = np.nan
         dtl_init[uniq_id_thresh_tits[j]] = np.nan
         ttl_init[uniq_id_thresh_tits[j]] = np.nan
-    
+
 # Subject pref plots
 subj_pref_df = pd.DataFrame(
     {"pre_pref_avg_dist": dtl_avg.toDict(), 
@@ -933,8 +933,13 @@ for uid in uids:
         if not len(df[df["id"] == uid][col]):  # skip empty
             continue
         if len(df[df["id"] == uid][col]) > 1:
-            y = np.concatenate(df[df["id"] == uid][col].tolist())
-            x = np.concatenate(df[df["id"] == uid][idx_col].tolist())
+            y = df[df["id"] == uid][col].tolist()
+            y = [np.array([v]) if np.ndim(v) == 0 else v for v in y]  # ensure scalars -> vectors
+            y = np.concatenate(y)
+            x = df[df["id"] == uid][idx_col].tolist()
+            x = [np.array([v]) if np.ndim(v) == 0 else v for v in x]  # ensure scalars -> vectors
+            x = np.concatenate(x)
+            #x = np.concatenate(df[df["id"] == uid][idx_col].tolist())
         else:
             y = df[df["id"] == uid][col].values[0]
             x = df[df["id"] == uid][idx_col].values[0]
@@ -966,7 +971,10 @@ for j, uid in enumerate(uids):
         if not len(df[df["id"] == uid][col]):  # skip empty
             continue
         if len(df[df["id"] == uid][col]) > 1:
-            y = np.concatenate(df[df["id"] == uid][col].tolist())
+            y = df[df["id"] == uid][col].tolist()
+            y = [np.array([v]) if np.ndim(v) == 0 else v for v in y]  # ensure scalars -> vectors
+            y = np.concatenate(y)
+            #y = np.concatenate(df[df["id"] == uid][col].tolist())
         else:
             y = df[df["id"] == uid][col].values[0]
         xpos = i + j * (len(cols) + 0.5)
