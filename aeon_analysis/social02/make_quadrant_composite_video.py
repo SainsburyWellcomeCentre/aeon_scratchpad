@@ -12,6 +12,7 @@ import datajoint as dj
 from aeon.dj_pipeline.analysis.block_analysis import *
 from aeon.dj_pipeline import acquisition, streams
 
+
 #global variables
 CAMERA_A = 'CameraTop'
 CAMERA_B_LIST = ['CameraSouth', 'CameraNorth', 'CameraEast', 'CameraWest']
@@ -313,15 +314,21 @@ def determine_quadrant_camera(positions_df):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Make composite videos of quadrant cameras from a 1h chunk.")
-    parser.add_argument('--experiment', type=str, default='social0.2', help='Name of the experiment.')
-    parser.add_argument('--arena', type=str, default='AEON3', help='Arena name.')
-    parser.add_argument('--dj_experiment_name', type=str, default='social0.2-aeon3', help='Experiment-arena as needed for DJ query.')
-    parser.add_argument('--dj_chunk_start', type=str, default="2024-02-10 11:00:00", help='Chunk start time in the format "YYYY-MM-DD HH:MM:SS".')
-    
-    args = parser.parse_args()
-    
-    process_file(args.experiment, args.arena, args.dj_experiment_name, args.dj_chunk_start) 
+    parser = argparse.ArgumentParser(description="Make composite videos of quadrant cameras from a 1h chunk(s).")
+    parser.add_argument('--experiments', type=str, nargs='+', help='Names of the experiments, separated by spaces.')
+    parser.add_argument('--arenas', type=str, nargs='+', help='Arena names, separated by spaces.')
+    parser.add_argument('--dj_experiment_names', type=str, nargs='+', help='Experiment-arena names needed for DJ query, separated by spaces.')
+    parser.add_argument('--dj_chunk_starts', type=str, nargs='+', help='Chunk start times in the format "YYYY-MM-DD HH:MM:SS", separated by spaces.')
 
+    args = parser.parse_args()
+
+    # Check if the number of provided arguments is consistent
+    if not (len(args.experiments) == len(args.arenas) == len(args.dj_experiment_names) == len(args.dj_chunk_starts)):
+        print("Error: The number of experiments, arenas, dj_experiment_names, and dj_chunk_starts must be equal.")
+        exit(1)
+
+    # Process each file
+    for experiment, arena, dj_experiment_name, dj_chunk_start in zip(args.experiments, args.arenas, args.dj_experiment_names, args.dj_chunk_starts):
+        process_file(experiment, arena, dj_experiment_name, dj_chunk_start)
 
 
