@@ -6,9 +6,9 @@ import random
 from shapely.geometry import Point, Polygon
 from pathlib import Path
 from aeon.io import api, video
-from aeon.schema.schemas import social02
-from aeon.dj_pipeline import streams
+from aeon.schema.schemas import exp02, social02
 import datajoint as dj
+from aeon.dj_pipeline import streams
 from aeon.dj_pipeline.analysis.block_analysis import *
 from aeon.dj_pipeline import acquisition, streams
 
@@ -19,9 +19,10 @@ CAMERA_B_LIST = ['CameraSouth', 'CameraNorth', 'CameraEast', 'CameraWest']
 CAMERA_DIMENSIONS = (1080, 1440)
 TIMESTAMP_ERROR_TOLERANCE = pd.Timedelta(milliseconds=9) 
 MAX_GAP_TO_FILL = pd.Timedelta(seconds=15)
+NEGLIGIBLE_GAP = pd.Timedelta(milliseconds=100)
 PART_RESTRICTION = {"part_name": "centroid"}
 BASE_PATH = '/ceph/aeon/aeon/'
-VIDEO_EXPORT_DIR = BASE_PATH + 'code/scratchpad/Orsi/pixel_mapping/composite_videos/test/'
+VIDEO_EXPORT_DIR = BASE_PATH + 'code/scratchpad/Orsi/pixel_mapping/composite_videos/'
 
 def process_file(experiment, arena, dj_experiment_name, dj_chunk_start):
 
@@ -34,6 +35,9 @@ def process_file(experiment, arena, dj_experiment_name, dj_chunk_start):
     homographies = [np.load(path) for path in homography_paths]
 
     # Fetch centroid data for Camera A
+    start = pd.Timestamp(dj_chunk_start)
+    end = start + pd.Timedelta(hours=1)
+    # centroid_df = api.load(ROOT, exp02.CameraTop.Position, start, end)
     pose_query = (
         streams.SpinnakerVideoSource
         * tracking.SLEAPTracking.PoseIdentity.proj("identity_name", "identity_likelihood", anchor_part="part_name")
@@ -48,9 +52,8 @@ def process_file(experiment, arena, dj_experiment_name, dj_chunk_start):
 
     # Clean centroid data
     centroid_df = (
-        centroid_df.groupby("identity_name")
+        centroid_df.groupby("identity_name", group_keys=False)
         .apply(lambda x: x.dropna().sort_index())
-        .droplevel(0)
     )
     centroid_df = centroid_df.sort_index()
     centroid_df["x"], centroid_df["y"] = centroid_df["x"].astype(np.int32), centroid_df["y"].astype(np.int32)
@@ -141,13 +144,18 @@ def process_file(experiment, arena, dj_experiment_name, dj_chunk_start):
         print(f"Length of gap: {gap_length} frames")
         
         # Fill NaNs if previous and next cameras are the same and the gap is below the threshold
-        if (end - start <= MAX_GAP_TO_FILL) and (prev_camera == next_camera) and (prev_camera != 'Unknown'):
+        if ((end - start <= MAX_GAP_TO_FILL) and (prev_camera == next_camera) and (prev_camera != 'Unknown')) or (end - start <= NEGLIGIBLE_GAP):
             fill_camera = prev_camera if isinstance(prev_camera, list) else [prev_camera]
             fill_quadrant = prev_quadrant if isinstance(prev_quadrant, list) else [prev_quadrant]
             
             # Fill the gap in the DataFrame
             quadrant_timestamp_df.loc[start:end, 'selected_camera_name'] = [fill_camera] * len(quadrant_timestamp_df.loc[start:end])
             quadrant_timestamp_df.loc[start:end, 'selected_quadrant'] = [fill_quadrant] * len(quadrant_timestamp_df.loc[start:end])
+        else:
+            raise ValueError("Some frames were not assigned quadrant cameras and the gap could not be filled.")
+
+            
+            
     print("Timestamp gaps filled in.")
     
     # Stich together the video
@@ -197,11 +205,15 @@ def process_file(experiment, arena, dj_experiment_name, dj_chunk_start):
     # Sort the final DataFrame by time if necessary
     frames_info_final.sort_index(inplace=True)
 
+    # Save the frames info to csv
+    experiment = experiment.replace('.', '')
+    start_time_str = start_time.strftime("%Y-%m-%dT%H-%M-%S")
+    frames_info_final.to_csv(f'{VIDEO_EXPORT_DIR}/{arena}_{experiment}_{start_time_str}_composite_vid_frames_info.csv')
+
     # Step 3: call video.frames on this to compile video and save it
     vid = video.frames(frames_info_final)
     # save the video
-    start_time_str = start_time.strftime("%Y-%m-%d_%H-%M-%S")
-    save_path = VIDEO_EXPORT_DIR + f"composite_video_{start_time_str}.avi"
+    save_path = VIDEO_EXPORT_DIR + f"{arena}_{experiment}_{start_time_str}_composite_video.avi"
     video.export(vid, save_path, fps=50)
     print(f"Composite video saved to: {save_path}")
     
