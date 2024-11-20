@@ -1,0 +1,131 @@
+from pathlib import Path
+
+import optuna
+import sleap
+from sleap.nn.config import *
+
+labels_file = "path/to/labels.slp"
+model_type = "centroid"  # or "centered_instance_multiclass"
+anchor_part = "centroid"
+crop_size = 96
+
+
+def create_cfg(optuna_params):
+    # set initial parameters
+    session_id = Path(labels_file).stem
+    parent_dir = str(Path(labels_file).parent)
+    if model_type == "centroid":
+        run_name = session_id + "_topdown_top.centroid"
+    elif model_type == "centered_instance_multiclass":
+        run_name = session_id + "_topdown_top.centered_instance_multiclass"
+    runs_folder = parent_dir + "/models"
+    labels = sleap.load_file(labels_file)
+
+    cfg = TrainingJobConfig()
+    cfg.data.labels.training_labels = labels_file
+    cfg.data.labels.validation_fraction = 0.1
+    cfg.data.labels.skeletons = labels.skeletons
+
+    cfg.data.preprocessing.input_scaling = (
+        optuna_params["input_scaling"] if model_type == "centroid" else 1.0
+    )
+
+    cfg.data.instance_cropping.center_on_part = anchor_part
+    cfg.data.instance_cropping.crop_size = crop_size
+
+    cfg.optimization.augmentation_config.rotate = True
+    cfg.optimization.epochs = 200
+    cfg.optimization.batch_size = 8  # 4
+
+    cfg.optimization.initial_learning_rate = optuna_params["initial_learning_rate"]
+    cfg.optimization.learning_rate_schedule.reduce_on_plateau = True
+    cfg.optimization.learning_rate_schedule.plateau_patience = 20  # default is 5
+
+    cfg.optimization.early_stopping.stop_training_on_plateau = True
+    cfg.optimization.early_stopping.plateau_patience = 10  # default is 10
+
+    # configure nn and model
+    cfg.model.backbone.unet = UNetConfig(
+        max_stride=optuna_params["max_stride"],
+        output_stride=2,
+        filters=16,
+        filters_rate=2.00 if model_type == "centroid" else 1.50,
+        # up_interpolate=True, # save computations but may lower accuracy
+    )
+    if model_type == "centroid":
+        cfg.model.heads.centroid = CentroidsHeadConfig(
+            anchor_part=anchor_part, sigma=2.5, output_stride=2
+        )
+    else:
+        confmaps = CenteredInstanceConfmapsHeadConfig(
+            anchor_part=anchor_part,
+            sigma=1.5,  # 2.5,
+            output_stride=2,  # 4,
+            loss_weight=1.0,
+        )
+        class_vectors = ClassVectorsHeadConfig(
+            classes=[track.name for track in labels.tracks],
+            output_stride=2,  # 16, #4,
+            num_fc_layers=3,
+            num_fc_units=256,
+            global_pool=True,
+            loss_weight=optuna_params["class_vectors_loss_weight"],
+        )
+        cfg.model.heads.multi_class_topdown = MultiClassTopDownConfig(
+            confmaps=confmaps, class_vectors=class_vectors
+        )
+    # configure outputs
+    cfg.outputs.run_name = run_name
+    cfg.outputs.save_outputs = True
+    cfg.outputs.runs_folder = runs_folder
+    cfg.outputs.save_visualizations = True
+    cfg.outputs.delete_viz_images = False
+    cfg.outputs.checkpointing.initial_model = True
+    cfg.outputs.checkpointing.best_model = True
+    return cfg
+
+
+def objective(trial: optuna.Trial) -> float:
+    # define parameters to optimise
+    initial_learning_rate_suggest = trial.suggest_float(
+        "initial_learning_rate", 1e-5, 1e-2, log=True
+    )
+    input_scaling_suggest = trial.suggest_float("input_scaling", 0.5, 1.0, step=0.25)
+    max_stride_suggest = trial.suggest_int("max_stride", 4, 16, step=4)
+    class_vectors_loss_weight_suggest = trial.suggest_float(
+        "class_vectors_loss_weight", 0.001, 1.0, log=True
+    )
+    # create config with selected params
+    cfg = create_cfg(
+        {
+            "initial_learning_rate": initial_learning_rate_suggest,
+            "input_scaling": input_scaling_suggest,
+            "max_stride": max_stride_suggest,
+            "class_vectors_loss_weight": class_vectors_loss_weight_suggest,
+        }
+    )
+
+    trainer = sleap.nn.training.Trainer.from_config(cfg)
+    trainer.setup()
+    trainer.train()
+
+    # return validation metric to optimise
+    val_metrics = sleap.load_metrics(cfg.outputs.run_name, split="val")
+    precision = val_metrics["vis.precision"]
+    recall = val_metrics["vis.recall"]
+    f1_score = 2 * (precision * recall) / (precision + recall)
+
+    return f1_score
+
+
+def main():
+    study = optuna.create_study()
+
+    # The optimization finishes after evaluating 1000 times or 3 seconds.
+    study.optimize(objective, n_trials=1000, timeout=3)
+
+    print(f"Best params is {study.best_params} with value {study.best_value}")
+
+
+if __name__ == "__main__":
+    main()
