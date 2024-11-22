@@ -4,8 +4,11 @@ import optuna
 import sleap
 from sleap.nn.config import *
 
-labels_file = "path/to/labels.slp"
-model_type = "centroid"  # or "centered_instance_multiclass"
+# labels_file = "/ceph/aeon/aeon/code/scratchpad/sleap/multi_point_tracking/multi_animal_CameraNSEW/aeon3_social03_ceph.slp"
+labels_file = (
+    "/ceph/aeon/aeon/code/scratchpad/sleap/social0.3/AEON4/aeon4_social_060624_ceph.slp"
+)
+model_type = "centered_instance_multiclass"  # or "centroid"
 anchor_part = "centroid"
 crop_size = 96
 
@@ -34,7 +37,7 @@ def create_cfg(optuna_params):
     cfg.data.instance_cropping.crop_size = crop_size
 
     cfg.optimization.augmentation_config.rotate = True
-    cfg.optimization.epochs = 200
+    cfg.optimization.epochs = 10
     cfg.optimization.batch_size = 8  # 4
 
     cfg.optimization.initial_learning_rate = optuna_params["initial_learning_rate"]
@@ -110,7 +113,13 @@ def objective(trial: optuna.Trial) -> float:
     trainer.train()
 
     # return validation metric to optimise
-    val_metrics = sleap.load_metrics(cfg.outputs.run_name, split="val")
+    path_prefix = f"{trainer.config.outputs.runs_folder}/{trainer.config.outputs.run_name}{trainer.config.outputs.run_name_suffix}"
+    labels_val_gt = sleap.load_file(f"{path_prefix}/labels_gt.val.slp")
+    labels_val_pr = sleap.load_file(f"{path_prefix}/labels_pr.val.slp")
+    val_metrics = sleap.nn.evals.evaluate(
+        labels_val_gt, labels_val_pr, oks_scale=crop_size
+    )
+    # val_metrics = sleap.load_metrics(cfg.outputs.run_name, split="val")
     precision = val_metrics["vis.precision"]
     recall = val_metrics["vis.recall"]
     f1_score = 2 * (precision * recall) / (precision + recall)
@@ -120,10 +129,10 @@ def objective(trial: optuna.Trial) -> float:
 
 def main():
     study = optuna.create_study()
-
     # The optimization finishes after evaluating 1000 times or 3 seconds.
-    study.optimize(objective, n_trials=1000, timeout=3)
-
+    study.optimize(objective, n_trials=5)
+    for trial in study.trials:
+        print(trial)
     print(f"Best params is {study.best_params} with value {study.best_value}")
 
 
