@@ -4,14 +4,13 @@ import optuna
 import sleap
 from sleap.nn.config import *
 
-labels_file = (
-    "/ceph/aeon/aeon/code/scratchpad/sleap/multi_point_tracking/multi_animal_CameraNSEW/aeon3_social03_ceph.slp"
-)
+labels_file = "/ceph/aeon/aeon/code/scratchpad/sleap/multi_point_tracking/multi_animal_CameraNSEW/aeon3_social03_ceph.slp"
 model_type = "centered_instance_multiclass"  # or "centroid"
 anchor_part = "centroid"
 
 
 def create_cfg(optuna_params):
+    """Create a SLEAP training job config with Optuna parameters."""
     # set initial parameters
     session_id = Path(labels_file).stem
     parent_dir = str(Path(labels_file).parent)
@@ -67,7 +66,7 @@ def create_cfg(optuna_params):
         )
         class_vectors = ClassVectorsHeadConfig(
             classes=[track.name for track in labels.tracks],
-            output_stride=optuna_params["output_stride"],  
+            output_stride=optuna_params["output_stride"],
             num_fc_layers=3,
             num_fc_units=optuna_params["num_fc_units"],
             global_pool=optuna_params["global_pool"],
@@ -87,23 +86,68 @@ def create_cfg(optuna_params):
     return cfg
 
 
+def compute_id_accuracy(labels_gt_path, labels_pr_path, crop_size):
+    """Compute average ID accuracy between ground truth and predicted labels."""
+    labels_gt = sleap.load_file(labels_gt_path)
+    labels_pr = sleap.load_file(labels_pr_path)
+    framepairs = sleap.nn.evals.find_frame_pairs(labels_gt, labels_pr)
+    matches = sleap.nn.evals.match_frame_pairs(framepairs, scale=crop_size)
+    positive_pairs = matches[0]
+    false_negatives = matches[1]
+
+    track_names = [track.name for track in labels_gt.tracks]
+    correct_id = {track_name: [] for track_name in track_names}
+
+    for positive_pair in positive_pairs:
+        gt = (
+            positive_pair[0]
+            if isinstance(positive_pair[1], sleap.PredictedInstance)
+            else positive_pair[1]
+        )
+        correct_id[gt.track.name].append(
+            positive_pair[0].track.name == positive_pair[1].track.name
+        )
+
+    track_sums = sum(sum(correct_id[track]) for track in track_names)
+    track_lens = sum(len(correct_id[track]) for track in track_names)
+
+    for track in track_names:
+        accuracy = round(sum(correct_id[track]) / len(correct_id[track]), 3)
+        print(f"- {track} Accuracy: {accuracy}")
+
+    avg_accuracy = track_sums / track_lens
+    print("- ID accuracy:", round(avg_accuracy, 3))
+    print("- Total tracks:", len(labels_gt.all_instances))
+    print("- Tracks identified:", len(labels_pr.all_instances))
+    print("- Tracks correctly identified:", track_sums)
+
+    return avg_accuracy
+
+
 def objective(trial: optuna.Trial) -> float:
+    """Objective function for Optuna to optimise."""
     # define parameters to optimise
     crop_size_suggest = trial.suggest_int("crop_size", 80, 160, step=16)
-    initial_learning_rate_suggest = trial.suggest_float("initial_learning_rate", 1e-5, 1e-2, log=True)
-    input_scaling_suggest = trial.suggest_float("input_scaling", 0.5, 1.0, step=0.25) # only for centroid model
+    initial_learning_rate_suggest = trial.suggest_float(
+        "initial_learning_rate", 1e-5, 1e-2, log=True
+    )
+    input_scaling_suggest = trial.suggest_float(
+        "input_scaling", 0.5, 1.0, step=0.25
+    )  # only for centroid model
     max_stride_suggest = trial.suggest_int("max_stride", 16, 32, step=16)
     filters_suggest = trial.suggest_int("filters", 16, 64, step=16)
     output_stride_suggest = trial.suggest_categorical("output_stride", [1, 2, 4])
     num_fc_units_suggest = trial.suggest_int("num_fc_units", 192, 448, step=64)
     global_pool_suggest = trial.suggest_categorical("global_pool", [True, False])
-    class_vectors_loss_weight_suggest = trial.suggest_float("class_vectors_loss_weight", 0.001, 1.0, log=True)
+    class_vectors_loss_weight_suggest = trial.suggest_float(
+        "class_vectors_loss_weight", 0.001, 1.0, log=True
+    )
     # create config with selected params
     cfg = create_cfg(
         {
             "crop_size": crop_size_suggest,
             "initial_learning_rate": initial_learning_rate_suggest,
-            "input_scaling": input_scaling_suggest, # only for centroid model
+            "input_scaling": input_scaling_suggest,  # only for centroid model
             "max_stride": max_stride_suggest,
             "filters": filters_suggest,
             "output_stride": output_stride_suggest,
@@ -112,29 +156,22 @@ def objective(trial: optuna.Trial) -> float:
             "class_vectors_loss_weight": class_vectors_loss_weight_suggest,
         }
     )
-
     trainer = sleap.nn.training.Trainer.from_config(cfg)
     trainer.setup()
     trainer.train()
-
-    # return validation metric to optimise
+    # compute validation metric to optimise
     path_prefix = f"{trainer.config.outputs.runs_folder}/{trainer.config.outputs.run_name}{trainer.config.outputs.run_name_suffix}"
-    labels_val_gt = sleap.load_file(f"{path_prefix}/labels_gt.val.slp")
-    labels_val_pr = sleap.load_file(f"{path_prefix}/labels_pr.val.slp")
-    val_metrics = sleap.nn.evals.evaluate(
-        labels_val_gt, labels_val_pr, oks_scale=crop_size_suggest
+    accuracy = compute_id_accuracy(
+        f"{path_prefix}/labels_val_gt.val.slp",
+        f"{path_prefix}/labels_val_pr.val.slp",
+        crop_size_suggest,
     )
-    # val_metrics = sleap.load_metrics(cfg.outputs.run_name, split="val")
-    precision = val_metrics["vis.precision"]
-    recall = val_metrics["vis.recall"]
-    f1_score = 2 * (precision * recall) / (precision + recall)
-
-    return f1_score
+    return accuracy
 
 
 def main():
     study = optuna.create_study(direction="maximize")
-    # The optimization finishes after evaluating 1000 times or 3 seconds.
+    # The optimization finishes after evaluating 5 times.
     study.optimize(objective, n_trials=5)
     for trial in study.trials:
         print(trial)
