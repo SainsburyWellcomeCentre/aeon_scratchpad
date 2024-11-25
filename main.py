@@ -4,13 +4,11 @@ import optuna
 import sleap
 from sleap.nn.config import *
 
-# labels_file = "/ceph/aeon/aeon/code/scratchpad/sleap/multi_point_tracking/multi_animal_CameraNSEW/aeon3_social03_ceph.slp"
 labels_file = (
-    "/ceph/aeon/aeon/code/scratchpad/sleap/social0.3/AEON4/aeon4_social_060624_ceph.slp"
+    "/ceph/aeon/aeon/code/scratchpad/sleap/multi_point_tracking/multi_animal_CameraNSEW/aeon3_social03_ceph.slp"
 )
 model_type = "centered_instance_multiclass"  # or "centroid"
 anchor_part = "centroid"
-crop_size = 96
 
 
 def create_cfg(optuna_params):
@@ -25,7 +23,8 @@ def create_cfg(optuna_params):
     labels = sleap.load_file(labels_file)
 
     cfg = TrainingJobConfig()
-    cfg.data.labels.training_labels = labels_file
+    cfg.data.labels.training_labels = parent_dir + "/" + session_id + ".train.pkg.slp"
+    cfg.data.labels.validation_labels = parent_dir + "/" + session_id + ".val.pkg.slp"
     cfg.data.labels.validation_fraction = 0.1
     cfg.data.labels.skeletons = labels.skeletons
 
@@ -34,7 +33,7 @@ def create_cfg(optuna_params):
     )
 
     cfg.data.instance_cropping.center_on_part = anchor_part
-    cfg.data.instance_cropping.crop_size = crop_size
+    cfg.data.instance_cropping.crop_size = optuna_params["crop_size"]
 
     cfg.optimization.augmentation_config.rotate = True
     cfg.optimization.epochs = 10
@@ -51,7 +50,7 @@ def create_cfg(optuna_params):
     cfg.model.backbone.unet = UNetConfig(
         max_stride=optuna_params["max_stride"],
         output_stride=2,
-        filters=16,
+        filters=optuna_params["filters"],
         filters_rate=2.00 if model_type == "centroid" else 1.50,
         # up_interpolate=True, # save computations but may lower accuracy
     )
@@ -68,10 +67,10 @@ def create_cfg(optuna_params):
         )
         class_vectors = ClassVectorsHeadConfig(
             classes=[track.name for track in labels.tracks],
-            output_stride=2,  # 16, #4,
+            output_stride=optuna_params["output_stride"],  
             num_fc_layers=3,
-            num_fc_units=256,
-            global_pool=True,
+            num_fc_units=optuna_params["num_fc_units"],
+            global_pool=optuna_params["global_pool"],
             loss_weight=optuna_params["class_vectors_loss_weight"],
         )
         cfg.model.heads.multi_class_topdown = MultiClassTopDownConfig(
@@ -90,20 +89,26 @@ def create_cfg(optuna_params):
 
 def objective(trial: optuna.Trial) -> float:
     # define parameters to optimise
-    initial_learning_rate_suggest = trial.suggest_float(
-        "initial_learning_rate", 1e-5, 1e-2, log=True
-    )
-    input_scaling_suggest = trial.suggest_float("input_scaling", 0.5, 1.0, step=0.25)
-    max_stride_suggest = trial.suggest_int("max_stride", 4, 16, step=4)
-    class_vectors_loss_weight_suggest = trial.suggest_float(
-        "class_vectors_loss_weight", 0.001, 1.0, log=True
-    )
+    crop_size_suggest = trial.suggest_int("crop_size", 80, 160, step=16)
+    initial_learning_rate_suggest = trial.suggest_float("initial_learning_rate", 1e-5, 1e-2, log=True)
+    input_scaling_suggest = trial.suggest_float("input_scaling", 0.5, 1.0, step=0.25) # only for centroid model
+    max_stride_suggest = trial.suggest_int("max_stride", 16, 32, step=16)
+    filters_suggest = trial.suggest_int("filters", 16, 64, step=16)
+    output_stride_suggest = trial.suggest_categorical("output_stride", [1, 2, 4])
+    num_fc_units_suggest = trial.suggest_int("num_fc_units", 192, 448, step=64)
+    global_pool_suggest = trial.suggest_categorical("global_pool", [True, False])
+    class_vectors_loss_weight_suggest = trial.suggest_float("class_vectors_loss_weight", 0.001, 1.0, log=True)
     # create config with selected params
     cfg = create_cfg(
         {
+            "crop_size": crop_size_suggest,
             "initial_learning_rate": initial_learning_rate_suggest,
-            "input_scaling": input_scaling_suggest,
+            "input_scaling": input_scaling_suggest, # only for centroid model
             "max_stride": max_stride_suggest,
+            "filters": filters_suggest,
+            "output_stride": output_stride_suggest,
+            "num_fc_units": num_fc_units_suggest,
+            "global_pool": global_pool_suggest,
             "class_vectors_loss_weight": class_vectors_loss_weight_suggest,
         }
     )
@@ -117,7 +122,7 @@ def objective(trial: optuna.Trial) -> float:
     labels_val_gt = sleap.load_file(f"{path_prefix}/labels_gt.val.slp")
     labels_val_pr = sleap.load_file(f"{path_prefix}/labels_pr.val.slp")
     val_metrics = sleap.nn.evals.evaluate(
-        labels_val_gt, labels_val_pr, oks_scale=crop_size
+        labels_val_gt, labels_val_pr, oks_scale=crop_size_suggest
     )
     # val_metrics = sleap.load_metrics(cfg.outputs.run_name, split="val")
     precision = val_metrics["vis.precision"]
@@ -128,7 +133,7 @@ def objective(trial: optuna.Trial) -> float:
 
 
 def main():
-    study = optuna.create_study()
+    study = optuna.create_study(direction="maximize")
     # The optimization finishes after evaluating 1000 times or 3 seconds.
     study.optimize(objective, n_trials=5)
     for trial in study.trials:
