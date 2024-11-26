@@ -120,7 +120,6 @@ def compute_id_accuracy(labels_gt_path, labels_pr_path, crop_size):
     print("- Total tracks:", len(labels_gt.all_instances))
     print("- Tracks identified:", len(labels_pr.all_instances))
     print("- Tracks correctly identified:", track_sums)
-
     return avg_accuracy
 
 
@@ -159,19 +158,36 @@ def objective(trial: optuna.Trial) -> float:
     trainer = sleap.nn.training.Trainer.from_config(cfg)
     trainer.setup()
     trainer.train()
-    # compute validation metric to optimise
+    # get validation loss from last epoch to optimise
+    history = trainer.keras_model.history
+    last_epoch_val_loss = history.history["val_loss"][-1]
+    # compute confusion matrix
     path_prefix = f"{trainer.config.outputs.runs_folder}/{trainer.config.outputs.run_name}{trainer.config.outputs.run_name_suffix}"
     accuracy = compute_id_accuracy(
         f"{path_prefix}/labels_val_gt.val.slp",
         f"{path_prefix}/labels_val_pr.val.slp",
-        crop_size_suggest,
+        crop_size_suggest
     )
-    return accuracy
+    return last_epoch_val_loss
 
 
 def main():
-    study = optuna.create_study(direction="maximize")
-    # The optimization finishes after evaluating 5 times.
+    study = optuna.create_study(direction="minimize")
+    # initialise with parameters that have worked well in the past
+    study.enqueue_trial(
+        {
+            "crop_size": 112,
+            "initial_learning_rate": 0.0001,
+            "input_scaling": 1.0,
+            "max_stride": 16,
+            "filters": 32,
+            "output_stride": 2,
+            "num_fc_units": 256,
+            "global_pool": True,
+            "class_vectors_loss_weight": 0.001,
+        }
+    )
+    # the optimization finishes after evaluating 5 times
     study.optimize(objective, n_trials=5)
     for trial in study.trials:
         print(trial)
