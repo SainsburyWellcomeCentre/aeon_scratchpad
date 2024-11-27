@@ -3,6 +3,7 @@
 import argparse
 import os
 import sqlite3
+from functools import partial
 from pathlib import Path
 
 import optuna
@@ -15,7 +16,7 @@ model_type = "centered_instance_multiclass"  # or "centroid"
 anchor_part = "centroid"
 
 
-def create_cfg(optuna_params):
+def create_cfg(optuna_params, labels_file):
     """Create a SLEAP training job config with Optuna parameters."""
     # set initial parameters
     session_id = Path(labels_file).stem
@@ -129,22 +130,8 @@ def compute_id_accuracy(labels_gt_path, labels_pr_path, crop_size):
     return avg_accuracy
 
 
-def objective(trial: optuna.Trial) -> float:
+def objective(trial: optuna.Trial, labels_file) -> float:
     """Objective function for Optuna to optimise."""
-    # initialise with parameters that have worked well in the past
-    study.enqueue_trial(
-        {
-            "crop_size": 112,
-            "initial_learning_rate": 0.0001,
-            "input_scaling": 1.0,
-            "max_stride": 16,
-            "filters": 32,
-            "output_stride": 2,
-            "num_fc_units": 256,
-            "global_pool": True,
-            "class_vectors_loss_weight": 0.001,
-        }
-    )
     # define parameters to optimise
     crop_size_suggest = trial.suggest_int("crop_size", 80, 160, step=16)
     initial_learning_rate_suggest = trial.suggest_float(
@@ -173,7 +160,8 @@ def objective(trial: optuna.Trial) -> float:
             "num_fc_units": num_fc_units_suggest,
             "global_pool": global_pool_suggest,
             "class_vectors_loss_weight": class_vectors_loss_weight_suggest,
-        }
+        },
+        labels_file,
     )
     trainer = sleap.nn.training.Trainer.from_config(cfg)
     trainer.setup()
@@ -191,7 +179,7 @@ def objective(trial: optuna.Trial) -> float:
     return last_epoch_val_loss
 
 
-def run_optuna_job(study_path, n_tasks, n_trials):
+def run_optuna_job(study_path, n_tasks, n_trials, labels_file):
     """Creates and runs an Optuna study whose trials can be parallelized across processes."""
     # Ensure the study directory exists
     study_path = Path(study_path)
@@ -202,6 +190,8 @@ def run_optuna_job(study_path, n_tasks, n_trials):
     db_url = f"sqlite:////{db_path}"
 
     # Initialize SQLite database and serve with Datasette
+    # connection = sqlite3.connect(db_path)  # create db
+    # connection.execute("PRAGMA journal_mode=WAL;")  # enable WAL for concurrent r/w
     os.system(f"sqlite3 {db_path} 'VACUUM;'")  # noqa: S605
     os.system(f"datasette serve {db_path} &")  # noqa: S605
 
@@ -226,9 +216,9 @@ def run_optuna_job(study_path, n_tasks, n_trials):
             "class_vectors_loss_weight": 0.001,
         }
     )
-    study.optimize(
-        objective, n_trials=(n_trials // n_tasks)
-    )  # divide trials across tasks
+    # Divide trials across tasks
+    partial_objective = partial(objective, labels_file=labels_file)
+    study.optimize(partial_objective, n_trials=(n_trials // n_tasks))
     print(f"Task completed. Best params: {study.best_params}")
 
 
@@ -243,6 +233,7 @@ def main():
     parser.add_argument("--labels-file", type=str, required=True, help="Path to SLEAP labels.")
     parser.add_argument("--output-dir", type=str, required=True, help="SLURM out and err dir.")
     parser.add_argument("--partition", type=str, default="gpu_branco", help="SLURM partition.")
+    # parser.add_argument("--nodelist", type=str, default="gpu-sr675-34", help="SLURM node.")
     parser.add_argument("--n-tasks", type=int, default=2, help="Number of parallel SLURM tasks.")
     parser.add_argument("--n-trials", type=int, default=100, help="Number of Optuna trials.")
     args = parser.parse_args()
@@ -253,12 +244,18 @@ def main():
     executor = submitit.AutoExecutor(folder=str(output_dir))
     executor.update_parameters(
         slurm_job_name="par_optuna_trials",
-        slurm_partition=args.partition,
         nodes=args.n_tasks,  # nodes correspond to tasks
+        slurm_partition=args.partition
     )
 
     # Submit the job
-    job = executor.submit(run_optuna_job, args.study_path, args.n_tasks, args.n_trials)
+    job = executor.submit(
+        run_optuna_job,
+        args.study_path,
+        args.n_tasks,
+        args.n_trials,
+        args.labels_file
+    )
     print(f"Submitted job ID: {job.job_id}")
 
 
