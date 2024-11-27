@@ -1,5 +1,5 @@
-# aeon_analysis
-Data Analysis code for Project Aeon
+# aeon_scratchpad
+Scratchpad repo for Project Aeon
 
 ## Citation Policy
 
