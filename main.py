@@ -12,20 +12,18 @@ import submitit
 from sleap.nn.config import *
 
 # Constants
-model_type = "centered_instance_multiclass"  # or "centroid"
 anchor_part = "centroid"
 
-
-def create_cfg(optuna_params, labels_file):
+def create_cfg(optuna_params, labels_file, output_dir):
     """Create a SLEAP training job config with Optuna parameters."""
     # set initial parameters
     session_id = Path(labels_file).stem
     parent_dir = str(Path(labels_file).parent)
-    if model_type == "centroid":
-        run_name = session_id + "_topdown_top.centroid"
-    elif model_type == "centered_instance_multiclass":
-        run_name = session_id + "_topdown_top.centered_instance_multiclass"
-    runs_folder = parent_dir + "/models"
+    run_name = session_id + "_topdown_top.centered_instance_multiclass"
+    if output_dir is not None:
+        runs_folder = output_dir
+    else:
+        runs_folder = parent_dir + "/models"
     labels = sleap.load_file(labels_file)
 
     cfg = TrainingJobConfig()
@@ -34,10 +32,7 @@ def create_cfg(optuna_params, labels_file):
     cfg.data.labels.validation_fraction = 0.1
     cfg.data.labels.skeletons = labels.skeletons
 
-    cfg.data.preprocessing.input_scaling = (
-        optuna_params["input_scaling"] if model_type == "centroid" else 1.0
-    )
-
+    cfg.data.preprocessing.input_scaling = 1.0
     cfg.data.instance_cropping.center_on_part = anchor_part
     cfg.data.instance_cropping.crop_size = optuna_params["crop_size"]
 
@@ -57,31 +52,26 @@ def create_cfg(optuna_params, labels_file):
         max_stride=optuna_params["max_stride"],
         output_stride=2,
         filters=optuna_params["filters"],
-        filters_rate=2.00 if model_type == "centroid" else 1.50,
+        filters_rate=1.50,
         # up_interpolate=True, # save computations but may lower accuracy
     )
-    if model_type == "centroid":
-        cfg.model.heads.centroid = CentroidsHeadConfig(
-            anchor_part=anchor_part, sigma=2.5, output_stride=2
-        )
-    else:
-        confmaps = CenteredInstanceConfmapsHeadConfig(
-            anchor_part=anchor_part,
-            sigma=1.5,  # 2.5,
-            output_stride=2,  # 4,
-            loss_weight=1.0,
-        )
-        class_vectors = ClassVectorsHeadConfig(
-            classes=[track.name for track in labels.tracks],
-            output_stride=optuna_params["output_stride"],
-            num_fc_layers=3,
-            num_fc_units=optuna_params["num_fc_units"],
-            global_pool=optuna_params["global_pool"],
-            loss_weight=optuna_params["class_vectors_loss_weight"],
-        )
-        cfg.model.heads.multi_class_topdown = MultiClassTopDownConfig(
-            confmaps=confmaps, class_vectors=class_vectors
-        )
+    confmaps = CenteredInstanceConfmapsHeadConfig(
+        anchor_part=anchor_part,
+        sigma=1.5,  # 2.5,
+        output_stride=2,  # 4,
+        loss_weight=1.0,
+    )
+    class_vectors = ClassVectorsHeadConfig(
+        classes=[track.name for track in labels.tracks],
+        output_stride=optuna_params["output_stride"],
+        num_fc_layers=3,
+        num_fc_units=optuna_params["num_fc_units"],
+        global_pool=optuna_params["global_pool"],
+        loss_weight=optuna_params["class_vectors_loss_weight"],
+    )
+    cfg.model.heads.multi_class_topdown = MultiClassTopDownConfig(
+        confmaps=confmaps, class_vectors=class_vectors
+    )
     # configure outputs
     cfg.outputs.run_name = run_name
     cfg.outputs.save_outputs = True
@@ -93,14 +83,13 @@ def create_cfg(optuna_params, labels_file):
     return cfg
 
 
-def compute_id_accuracy(labels_gt_path, labels_pr_path, crop_size):
+def compute_id_metrics(labels_gt_path, labels_pr_path, crop_size):
     """Compute average ID accuracy between ground truth and predicted labels."""
     labels_gt = sleap.load_file(labels_gt_path)
     labels_pr = sleap.load_file(labels_pr_path)
     framepairs = sleap.nn.evals.find_frame_pairs(labels_gt, labels_pr)
     matches = sleap.nn.evals.match_frame_pairs(framepairs, scale=crop_size)
     positive_pairs = matches[0]
-    false_negatives = matches[1]
 
     track_names = [track.name for track in labels_gt.tracks]
     correct_id = {track_name: [] for track_name in track_names}
@@ -115,45 +104,48 @@ def compute_id_accuracy(labels_gt_path, labels_pr_path, crop_size):
             positive_pair[0].track.name == positive_pair[1].track.name
         )
 
-    track_sums = sum(sum(correct_id[track]) for track in track_names)
-    track_lens = sum(len(correct_id[track]) for track in track_names)
+    print("Total gt tracks:", len(labels_gt.tracks))
+    print("Total pr tracks:", len(labels_pr.tracks))
 
-    for track in track_names:
-        accuracy = round(sum(correct_id[track]) / len(correct_id[track]), 3)
-        print(f"- {track} Accuracy: {accuracy}")
+    metrics = {}
+    for i in range(2):
+        track = track_names[i]
+        other_track = track_names[1 - i]
+        TP = correct_id[track].count(True)
+        FN = correct_id[track].count(False)
+        FP = correct_id[other_track].count(False)
+        precision = TP / (TP + FP) if TP + FP > 0 else 0
+        recall = TP / (TP + FN) if TP + FN > 0 else 0
+        accuracy = TP / (TP + FN + FP) if TP + FN + FP > 0 else 0
+        metrics[track] = {
+            "precision": precision,
+            "recall": recall,
+            "accuracy": accuracy,
+        }
+        print(f"Track: {track}")
+        print(f"- Precision: {precision}")
+        print(f"- Recall: {recall}")
+        print(f"- Accuracy: {accuracy}")
+    
+    return metrics
 
-    avg_accuracy = track_sums / track_lens
-    print("- ID accuracy:", round(avg_accuracy, 3))
-    print("- Total tracks:", len(labels_gt.all_instances))
-    print("- Tracks identified:", len(labels_pr.all_instances))
-    print("- Tracks correctly identified:", track_sums)
-    return avg_accuracy
 
-
-def objective(trial: optuna.Trial, labels_file) -> float:
+def objective(trial: optuna.Trial, labels_file, model_output_dir) -> float:
     """Objective function for Optuna to optimise."""
     # define parameters to optimise
-    crop_size_suggest = trial.suggest_int("crop_size", 80, 160, step=16)
-    initial_learning_rate_suggest = trial.suggest_float(
-        "initial_learning_rate", 1e-5, 1e-2, log=True
-    )
-    input_scaling_suggest = trial.suggest_float(
-        "input_scaling", 0.5, 1.0, step=0.25
-    )  # only for centroid model
-    max_stride_suggest = trial.suggest_int("max_stride", 16, 32, step=16)
+    crop_size_suggest = trial.suggest_int("crop_size", 80, 128, step=16)
+    initial_learning_rate_suggest = trial.suggest_float("initial_learning_rate", 1e-5, 1e-3, log=True)
+    max_stride_suggest = trial.suggest_int("max_stride", 16, 32, step=8)
     filters_suggest = trial.suggest_int("filters", 16, 64, step=16)
     output_stride_suggest = trial.suggest_categorical("output_stride", [1, 2, 4])
-    num_fc_units_suggest = trial.suggest_int("num_fc_units", 192, 448, step=64)
+    num_fc_units_suggest = trial.suggest_int("num_fc_units", 128, 512, step=32)
     global_pool_suggest = trial.suggest_categorical("global_pool", [True, False])
-    class_vectors_loss_weight_suggest = trial.suggest_float(
-        "class_vectors_loss_weight", 0.001, 1.0, log=True
-    )
+    class_vectors_loss_weight_suggest = trial.suggest_float("class_vectors_loss_weight", 0.001, 1.0, log=True)
     # create config with selected params
     cfg = create_cfg(
         {
             "crop_size": crop_size_suggest,
             "initial_learning_rate": initial_learning_rate_suggest,
-            "input_scaling": input_scaling_suggest,  # only for centroid model
             "max_stride": max_stride_suggest,
             "filters": filters_suggest,
             "output_stride": output_stride_suggest,
@@ -162,6 +154,7 @@ def objective(trial: optuna.Trial, labels_file) -> float:
             "class_vectors_loss_weight": class_vectors_loss_weight_suggest,
         },
         labels_file,
+        model_output_dir
     )
     trainer = sleap.nn.training.Trainer.from_config(cfg)
     trainer.setup()
@@ -171,15 +164,15 @@ def objective(trial: optuna.Trial, labels_file) -> float:
     last_epoch_val_loss = history.history["val_loss"][-1]
     # compute confusion matrix
     path_prefix = f"{trainer.config.outputs.runs_folder}/{trainer.config.outputs.run_name}{trainer.config.outputs.run_name_suffix}"
-    accuracy = compute_id_accuracy(
-        f"{path_prefix}/labels_val_gt.val.slp",
-        f"{path_prefix}/labels_val_pr.val.slp",
+    id_metrics = compute_id_metrics(
+        f"{path_prefix}/labels_gt.val.slp",
+        f"{path_prefix}/labels_pr.val.slp",
         crop_size_suggest
     )
     return last_epoch_val_loss
 
 
-def run_optuna_job(study_path, n_tasks, n_trials, labels_file):
+def run_optuna_job(study_path, n_tasks, n_trials, labels_file, model_output_dir):
     """Creates and runs an Optuna study whose trials can be parallelized across processes."""
     # Ensure the study directory exists
     study_path = Path(study_path)
@@ -217,7 +210,7 @@ def run_optuna_job(study_path, n_tasks, n_trials, labels_file):
         }
     )
     # Divide trials across tasks
-    partial_objective = partial(objective, labels_file=labels_file)
+    partial_objective = partial(objective, labels_file=labels_file, model_output_dir=model_output_dir)
     study.optimize(partial_objective, n_trials=(n_trials // n_tasks))
     print(f"Task completed. Best params: {study.best_params}")
 
@@ -231,7 +224,8 @@ def main():
         help="Full path to where the shared RDB should be created."
     )
     parser.add_argument("--labels-file", type=str, required=True, help="Path to SLEAP labels.")
-    parser.add_argument("--output-dir", type=str, required=True, help="SLURM out and err dir.")
+    parser.add_argument("--model-output-dir", type=str, default=None, help="Model output directory.")
+    parser.add_argument("--slurm-output-dir", type=str, required=True, help="SLURM out and err dir.")
     parser.add_argument("--partition", type=str, default="gpu_branco", help="SLURM partition.")
     # parser.add_argument("--nodelist", type=str, default="gpu-sr675-34", help="SLURM node.")
     parser.add_argument("--n-tasks", type=int, default=2, help="Number of parallel SLURM tasks.")
@@ -239,13 +233,14 @@ def main():
     args = parser.parse_args()
 
     # Set up Submitit executor
-    output_dir = Path(args.output_dir)
+    output_dir = Path(args.slurm_output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     executor = submitit.AutoExecutor(folder=str(output_dir))
     executor.update_parameters(
         slurm_job_name="par_optuna_trials",
-        nodes=args.n_tasks,  # nodes correspond to tasks
-        slurm_partition=args.partition
+        tasks_per_node=args.n_tasks,  # nodes correspond to tasks
+        slurm_partition=args.partition,
+        time=60*48
     )
 
     # Submit the job
@@ -254,7 +249,8 @@ def main():
         args.study_path,
         args.n_tasks,
         args.n_trials,
-        args.labels_file
+        args.labels_file,
+        args.model_output_dir
     )
     print(f"Submitted job ID: {job.job_id}")
 
