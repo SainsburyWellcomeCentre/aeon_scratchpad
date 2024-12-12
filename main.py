@@ -5,11 +5,13 @@ import os
 import sqlite3
 from functools import partial
 from pathlib import Path
+import uuid
 
 import optuna
 import sleap
 import submitit
 from sleap.nn.config import *
+from tensorflow.python.client import device_lib
 
 # Constants
 anchor_part = "centroid"
@@ -19,7 +21,8 @@ def create_cfg(optuna_params, labels_file, output_dir):
     # set initial parameters
     session_id = Path(labels_file).stem
     parent_dir = str(Path(labels_file).parent)
-    run_name = session_id + "_topdown_top.centered_instance_multiclass"
+    unique_suffix = str(uuid.uuid4())[:8]
+    run_name = session_id + "_topdown_top.centered_instance_multiclass_" + unique_suffix
     if output_dir is not None:
         runs_folder = output_dir
     else:
@@ -161,7 +164,7 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir) -> float:
     trainer.train()
     # get validation loss from last epoch to optimise
     history = trainer.keras_model.history
-    last_epoch_val_loss = history.history["val_loss"][-1]
+    last_epoch_val_loss = history.history["val_ClassVectorsHead_loss"][-1]
     # compute confusion matrix
     path_prefix = f"{trainer.config.outputs.runs_folder}/{trainer.config.outputs.run_name}{trainer.config.outputs.run_name_suffix}"
     id_metrics = compute_id_metrics(
@@ -174,6 +177,8 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir) -> float:
 
 def run_optuna_job(study_path, n_tasks, n_trials, labels_file, model_output_dir):
     """Creates and runs an Optuna study whose trials can be parallelized across processes."""
+    print(device_lib.list_local_devices())
+
     # Ensure the study directory exists
     study_path = Path(study_path)
     study_path.mkdir(parents=True, exist_ok=True)
@@ -240,7 +245,9 @@ def main():
         slurm_job_name="par_optuna_trials",
         tasks_per_node=args.n_tasks,  # nodes correspond to tasks
         slurm_partition=args.partition,
-        time=60*48
+        gpus_per_node = 1,
+        mem_gb = 256,
+        time=60*48,
     )
 
     # Submit the job
