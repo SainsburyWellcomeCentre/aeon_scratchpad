@@ -11,7 +11,7 @@ import optuna
 import sleap
 import submitit
 from sleap.nn.config import *
-from tensorflow.python.client import device_lib
+from sleap.nn.inference import TopDownMultiClassPredictor
 
 # Constants
 anchor_part = "centroid"
@@ -86,10 +86,8 @@ def create_cfg(optuna_params, labels_file, output_dir):
     return cfg
 
 
-def compute_id_metrics(labels_gt_path, labels_pr_path, crop_size):
+def compute_id_metrics(labels_gt, labels_pr, crop_size):
     """Compute average ID accuracy between ground truth and predicted labels."""
-    labels_gt = sleap.load_file(labels_gt_path)
-    labels_pr = sleap.load_file(labels_pr_path)
     framepairs = sleap.nn.evals.find_frame_pairs(labels_gt, labels_pr)
     matches = sleap.nn.evals.match_frame_pairs(framepairs, scale=crop_size)
     positive_pairs = matches[0]
@@ -162,23 +160,26 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir) -> float:
     trainer = sleap.nn.training.Trainer.from_config(cfg)
     trainer.setup()
     trainer.train()
+    model_directory = f"{trainer.config.outputs.runs_folder}/{trainer.config.outputs.run_name}{trainer.config.outputs.run_name_suffix}"
+    predictor = TopDownMultiClassPredictor.from_trained_models(
+        confmap_model_path=model_directory,
+    )
+    labels_gt = sleap.load_file(f"{model_directory}/labels_gt.val.slp")
+    labels_pr = predictor.predict(labels_gt)
     # get validation loss from last epoch to optimise
     history = trainer.keras_model.history
     last_epoch_val_loss = history.history["val_ClassVectorsHead_loss"][-1]
     # compute confusion matrix
-    path_prefix = f"{trainer.config.outputs.runs_folder}/{trainer.config.outputs.run_name}{trainer.config.outputs.run_name_suffix}"
     id_metrics = compute_id_metrics(
-        f"{path_prefix}/labels_gt.val.slp",
-        f"{path_prefix}/labels_pr.val.slp",
+        labels_gt,
+        labels_pr,
         crop_size_suggest
     )
     return last_epoch_val_loss
 
 
 def run_optuna_job(study_path, n_tasks, n_trials, labels_file, model_output_dir):
-    """Creates and runs an Optuna study whose trials can be parallelized across processes."""
-    print(device_lib.list_local_devices())
-
+    """Creates and runs an Optuna study whose trials can be parallelized across processes."""    
     # Ensure the study directory exists
     study_path = Path(study_path)
     study_path.mkdir(parents=True, exist_ok=True)
@@ -232,7 +233,7 @@ def main():
     parser.add_argument("--model-output-dir", type=str, default=None, help="Model output directory.")
     parser.add_argument("--slurm-output-dir", type=str, required=True, help="SLURM out and err dir.")
     parser.add_argument("--partition", type=str, default="gpu_branco", help="SLURM partition.")
-    # parser.add_argument("--nodelist", type=str, default="gpu-sr675-34", help="SLURM node.")
+    parser.add_argument("--nodelist", type=str, default="gpu-sr675-34", help="SLURM node.")
     parser.add_argument("--n-tasks", type=int, default=2, help="Number of parallel SLURM tasks.")
     parser.add_argument("--n-trials", type=int, default=100, help="Number of Optuna trials.")
     args = parser.parse_args()
@@ -245,9 +246,11 @@ def main():
         slurm_job_name="par_optuna_trials",
         tasks_per_node=args.n_tasks,  # nodes correspond to tasks
         slurm_partition=args.partition,
-        gpus_per_node = 1,
-        mem_gb = 256,
+        gpus_per_task=1,
+        cpus_per_task=32,
+        mem_gb=256,
         time=60*48,
+        slurm_additional_parameters={"nodelist": args.nodelist},
     )
 
     # Submit the job
