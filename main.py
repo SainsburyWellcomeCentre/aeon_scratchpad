@@ -53,7 +53,7 @@ def create_cfg(optuna_params, labels_file, output_dir):
     # configure nn and model
     cfg.model.backbone.unet = UNetConfig(
         max_stride=optuna_params["max_stride"],
-        output_stride=2,
+        output_stride=optuna_params["output_stride"],
         filters=optuna_params["filters"],
         filters_rate=1.50,
         # up_interpolate=True, # save computations but may lower accuracy
@@ -61,7 +61,7 @@ def create_cfg(optuna_params, labels_file, output_dir):
     confmaps = CenteredInstanceConfmapsHeadConfig(
         anchor_part=anchor_part,
         sigma=1.5,  # 2.5,
-        output_stride=2,  # 4,
+        output_stride=optuna_params["output_stride"],
         loss_weight=1.0,
     )
     class_vectors = ClassVectorsHeadConfig(
@@ -138,9 +138,10 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir) -> float:
     initial_learning_rate_suggest = trial.suggest_float("initial_learning_rate", 1e-5, 1e-3, log=True)
     max_stride_suggest = trial.suggest_int("max_stride", 16, 32, step=8)
     filters_suggest = trial.suggest_int("filters", 16, 64, step=16)
-    output_stride_suggest = trial.suggest_categorical("output_stride", [1, 2, 4])
+    # output_stride_suggest = trial.suggest_categorical("output_stride", [2, 4])
+    # output_stride_suggest = trial.suggest_int("output_stride", 2, 4, step=2)
     num_fc_units_suggest = trial.suggest_int("num_fc_units", 128, 512, step=32)
-    global_pool_suggest = trial.suggest_categorical("global_pool", [True, False])
+    # global_pool_suggest = trial.suggest_categorical("global_pool", [True, False])
     class_vectors_loss_weight_suggest = trial.suggest_float("class_vectors_loss_weight", 0.001, 1.0, log=True)
     # create config with selected params
     cfg = create_cfg(
@@ -149,9 +150,10 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir) -> float:
             "initial_learning_rate": initial_learning_rate_suggest,
             "max_stride": max_stride_suggest,
             "filters": filters_suggest,
-            "output_stride": output_stride_suggest,
+            # "output_stride": output_stride_suggest,
+            "output_stride": 2,
             "num_fc_units": num_fc_units_suggest,
-            "global_pool": global_pool_suggest,
+            "global_pool": True,
             "class_vectors_loss_weight": class_vectors_loss_weight_suggest,
         },
         labels_file,
@@ -178,21 +180,22 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir) -> float:
     return last_epoch_val_loss
 
 
-def run_optuna_job(study_path, n_tasks, n_trials, labels_file, model_output_dir):
-    """Creates and runs an Optuna study whose trials can be parallelized across processes."""    
+def run_optuna_job(study_path, db_name, n_tasks, n_trials, labels_file, model_output_dir):
+    """Creates and runs an Optuna study whose trials can be parallelized across processes."""
     # Ensure the study directory exists
     study_path = Path(study_path)
     study_path.mkdir(parents=True, exist_ok=True)
 
     # Define SQLite storage path
-    db_path = study_path / "db.db"
+    db_path = study_path / db_name
     db_url = f"sqlite:////{db_path}"
 
     # Initialize SQLite database and serve with Datasette
-    # connection = sqlite3.connect(db_path)  # create db
-    # connection.execute("PRAGMA journal_mode=WAL;")  # enable WAL for concurrent r/w
     os.system(f"sqlite3 {db_path} 'VACUUM;'")  # noqa: S605
     os.system(f"datasette serve {db_path} &")  # noqa: S605
+    # * May have to switch back to this connection method if `os.system` commands unreliable.
+    # connection = sqlite3.connect(db_path)  # create db
+    # connection.execute("PRAGMA journal_mode=WAL;")  # enable WAL for concurrent r/w
 
     # Create the Optuna study (if it doesn't already exist)
     try:
@@ -202,19 +205,20 @@ def run_optuna_job(study_path, n_tasks, n_trials, labels_file, model_output_dir)
 
     # Load the study, enqueue the first trial, and optimize.
     study = optuna.load_study(study_name="par_optuna_trials", storage=db_url)
-    study.enqueue_trial(
-        {
-            "crop_size": 112,
-            "initial_learning_rate": 0.0001,
-            "input_scaling": 1.0,
-            "max_stride": 16,
-            "filters": 32,
-            "output_stride": 2,
-            "num_fc_units": 256,
-            "global_pool": True,
-            "class_vectors_loss_weight": 0.001,
-        }
-    )
+    # * Enqueing caused an issue with trials being split across gpus.
+    # study.enqueue_trial(
+    #     {
+    #         "crop_size": 112,
+    #         "initial_learning_rate": 0.0001,
+    #         "input_scaling": 1.0,
+    #         "max_stride": 16,
+    #         "filters": 32,
+    #         "output_stride": 2,
+    #         "num_fc_units": 256,
+    #         "global_pool": True,
+    #         "class_vectors_loss_weight": 0.001,
+    #     }
+    # )
     # Divide trials across tasks
     partial_objective = partial(objective, labels_file=labels_file, model_output_dir=model_output_dir)
     study.optimize(partial_objective, n_trials=(n_trials // n_tasks))
@@ -229,9 +233,15 @@ def main():
         required=True,
         help="Full path to where the shared RDB should be created."
     )
+    parser.add_argument(
+        "--db-name",
+        type=str,
+        required=True,
+        help="Name of SQLite '.db' file; e.g. 'db.db'"
+    )
     parser.add_argument("--labels-file", type=str, required=True, help="Path to SLEAP labels.")
-    parser.add_argument("--model-output-dir", type=str, default=None, help="Model output directory.")
-    parser.add_argument("--slurm-output-dir", type=str, required=True, help="SLURM out and err dir.")
+    parser.add_argument("--slurm-output-dir", type=str, required=True, help="SLURM out & err dir.")
+    parser.add_argument("--model-output-dir", type=str, required=True, help="Model output dir.")
     parser.add_argument("--partition", type=str, default="gpu_branco", help="SLURM partition.")
     parser.add_argument("--nodelist", type=str, default="gpu-sr675-34", help="SLURM node.")
     parser.add_argument("--n-tasks", type=int, default=2, help="Number of parallel SLURM tasks.")
@@ -246,10 +256,10 @@ def main():
         slurm_job_name="par_optuna_trials",
         tasks_per_node=args.n_tasks,  # nodes correspond to tasks
         slurm_partition=args.partition,
-        gpus_per_task=1,
+        slurm_gpus_per_task=1,
         cpus_per_task=32,
         mem_gb=256,
-        time=60*48,
+        slurm_time=60*48,
         slurm_additional_parameters={"nodelist": args.nodelist},
     )
 
@@ -257,6 +267,7 @@ def main():
     job = executor.submit(
         run_optuna_job,
         args.study_path,
+        args.db_name,
         args.n_tasks,
         args.n_trials,
         args.labels_file,
