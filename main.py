@@ -246,6 +246,7 @@ def main():
     parser.add_argument("--nodelist", type=str, default="gpu-sr675-34", help="SLURM node.")
     parser.add_argument("--n-tasks", type=int, default=2, help="Number of parallel SLURM tasks.")
     parser.add_argument("--n-trials", type=int, default=100, help="Number of Optuna trials.")
+    parser.add_argument("--slurm-job-name", type=str, default="par_optuna", help="SLURM job name.")
     args = parser.parse_args()
 
     # Set up Submitit executor
@@ -253,7 +254,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     executor = submitit.AutoExecutor(folder=str(output_dir))
     executor.update_parameters(
-        slurm_job_name="par_optuna_trials",
+        slurm_job_name=args.slurm_job_name,
         tasks_per_node=args.n_tasks,  # nodes correspond to tasks
         slurm_partition=args.partition,
         slurm_gpus_per_task=1,
