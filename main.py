@@ -210,7 +210,7 @@ def run_optuna_job(
     os.system(f"datasette serve {db_path} &")  # noqa: S605
 
     # Create the Optuna study (if it doesn't already exist)
-    slurm_procid = int(os.environ.get("SLURM_PROCID", 0))  # Default to 0 if not in SLURM
+    slurm_procid = int(os.environ.get("SLURM_PROCID"))
     print(f"SLURM_PROCID: {slurm_procid}")
     if slurm_procid != 0:
         print("Waiting 10s for task 0 to create the database...")
