@@ -9,6 +9,7 @@ from pathlib import Path
 import uuid
 
 import optuna
+from optuna.storages import RDBStorage
 import sleap
 import submitit
 from sleap.nn.config import *
@@ -132,7 +133,7 @@ def compute_id_metrics(labels_gt, labels_pr, crop_size):
     return metrics
 
 
-def objective(trial: optuna.Trial, labels_file, model_output_dir) -> float:
+def objective(trial: optuna.Trial, labels_file, model_output_dir, save_outputs) -> float:
     """Objective function for Optuna to optimise."""
     # define parameters to optimise
     crop_size_suggest = trial.suggest_int("crop_size", 80, 128, step=16)
@@ -178,7 +179,10 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir) -> float:
         labels_pr,
         crop_size_suggest
     )
-    os.system(f"rm -r {model_directory}")
+    if save_outputs:
+        sleap.Labels.save_file(labels_pr, f"{model_directory}/labels_pr.val.slp")
+    else:
+        os.system(f"rm -r {model_directory}")
     return last_epoch_val_loss
 
 
@@ -189,7 +193,8 @@ def run_optuna_job(
         n_tasks,
         n_trials,
         labels_file,
-        model_output_dir
+        model_output_dir,
+        save_outputs
     ):
     """Creates and runs an Optuna study whose trials can be parallelized across processes."""
     # Ensure the study directory exists
@@ -203,37 +208,36 @@ def run_optuna_job(
     # Initialize SQLite database and serve with Datasette
     os.system(f"sqlite3 {db_path} 'VACUUM;'")  # noqa: S605
     os.system(f"datasette serve {db_path} &")  # noqa: S605
-    # * May have to switch back to this connection method if `os.system` commands unreliable.
-    # connection = sqlite3.connect(db_path)  # create db
-    # connection.execute("PRAGMA journal_mode=WAL;")  # enable WAL for concurrent r/w
 
     # Create the Optuna study (if it doesn't already exist)
+    slurm_procid = int(os.environ.get("SLURM_PROCID", 0))  # Default to 0 if not in SLURM
+    print(f"SLURM_PROCID: {slurm_procid}")
+    if slurm_procid != 0:
+        print("Waiting 10s for task 0 to create the database...")
+        os.system("sleep 10")
+    storage = RDBStorage(db_url)
     optuna.create_study(
-        study_name=study_name, storage=db_url, direction="minimize", load_if_exists=True
+        study_name=study_name, storage=storage, direction="minimize", load_if_exists=True
     )
-    # try:
-    #     optuna.create_study(study_name="par_optuna_trials", storage=db_url, direction="minimize")
-    # except (optuna.exceptions.DuplicatedStudyError, sqlite3.OperationalError):
-    #     print("Study already exists. Loading existing study.")
 
     # Load the study, enqueue the first trial, and optimize.
-    study = optuna.load_study(study_name="par_optuna_trials", storage=db_url)
-    # * Enqueing caused an issue with trials being split across gpus.
-    study.enqueue_trial(
-        {
-            "crop_size": 112,
-            "initial_learning_rate": 0.0001,
-            "input_scaling": 1.0,
-            "max_stride": 16,
-            "filters": 32,
-            "output_stride": 2,
-            "num_fc_units": 256,
-            "global_pool": True,
-            "class_vectors_loss_weight": 0.001,
-        }
-    )
+    study = optuna.load_study(study_name=study_name, storage=storage)
+    if slurm_procid == 0:
+        study.enqueue_trial(
+            {
+                "crop_size": 112,
+                "initial_learning_rate": 0.0001,
+                "input_scaling": 1.0,
+                "max_stride": 16,
+                "filters": 32,
+                "output_stride": 2,
+                "num_fc_units": 256,
+                "global_pool": True,
+                "class_vectors_loss_weight": 0.001,
+            }
+        )
     # Divide trials across tasks
-    partial_objective = partial(objective, labels_file=labels_file, model_output_dir=model_output_dir)
+    partial_objective = partial(objective, labels_file=labels_file, model_output_dir=model_output_dir, save_outputs=save_outputs)
     study.optimize(partial_objective, n_trials=(n_trials // n_tasks))
     print(f"Task completed. Best params: {study.best_params}")
 
@@ -261,6 +265,7 @@ def main():
     parser.add_argument("--n-tasks", type=int, default=2, help="Number of parallel SLURM tasks.")
     parser.add_argument("--n-trials", type=int, default=100, help="Number of Optuna trials.")
     parser.add_argument("--slurm-job-name", type=str, default="par_optuna", help="SLURM job name.")
+    parser.add_argument("--save-outputs", type=bool, default=False, help="Save outputs.")
     args = parser.parse_args()
 
     # Set up Submitit executor
@@ -287,7 +292,8 @@ def main():
         args.n_tasks,
         args.n_trials,
         args.labels_file,
-        args.model_output_dir
+        args.model_output_dir,
+        args.save_outputs
     )
     print(f"Submitted job ID: {job.job_id}")
 
