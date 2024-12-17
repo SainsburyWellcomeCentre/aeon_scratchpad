@@ -1,6 +1,7 @@
 """Parallelized Optuna hyperparameter optimization for SLEAP training."""
 
 import argparse
+from json import load
 import os
 import sqlite3
 from functools import partial
@@ -139,7 +140,7 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir) -> float:
     max_stride_suggest = trial.suggest_int("max_stride", 16, 32, step=8)
     filters_suggest = trial.suggest_int("filters", 16, 64, step=16)
     # output_stride_suggest = trial.suggest_categorical("output_stride", [2, 4])
-    # output_stride_suggest = trial.suggest_int("output_stride", 2, 4, step=2)
+    output_stride_suggest = trial.suggest_int("output_stride", 2, 4, step=2)
     num_fc_units_suggest = trial.suggest_int("num_fc_units", 128, 512, step=32)
     # global_pool_suggest = trial.suggest_categorical("global_pool", [True, False])
     class_vectors_loss_weight_suggest = trial.suggest_float("class_vectors_loss_weight", 0.001, 1.0, log=True)
@@ -150,7 +151,7 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir) -> float:
             "initial_learning_rate": initial_learning_rate_suggest,
             "max_stride": max_stride_suggest,
             "filters": filters_suggest,
-            # "output_stride": output_stride_suggest,
+            "output_stride": output_stride_suggest,
             "output_stride": 2,
             "num_fc_units": num_fc_units_suggest,
             "global_pool": True,
@@ -172,15 +173,24 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir) -> float:
     history = trainer.keras_model.history
     last_epoch_val_loss = history.history["val_ClassVectorsHead_loss"][-1]
     # compute confusion matrix
-    id_metrics = compute_id_metrics(
+    _id_metrics = compute_id_metrics(
         labels_gt,
         labels_pr,
         crop_size_suggest
     )
+    os.system(f"rm -r {model_directory}")
     return last_epoch_val_loss
 
 
-def run_optuna_job(study_path, db_name, n_tasks, n_trials, labels_file, model_output_dir):
+def run_optuna_job(
+        study_path,
+        db_name,
+        study_name,
+        n_tasks,
+        n_trials,
+        labels_file,
+        model_output_dir
+    ):
     """Creates and runs an Optuna study whose trials can be parallelized across processes."""
     # Ensure the study directory exists
     study_path = Path(study_path)
@@ -198,27 +208,30 @@ def run_optuna_job(study_path, db_name, n_tasks, n_trials, labels_file, model_ou
     # connection.execute("PRAGMA journal_mode=WAL;")  # enable WAL for concurrent r/w
 
     # Create the Optuna study (if it doesn't already exist)
-    try:
-        optuna.create_study(study_name="par_optuna_trials", storage=db_url, direction="minimize")
-    except (optuna.exceptions.DuplicatedStudyError, sqlite3.OperationalError):
-        print("Study already exists. Loading existing study.")
+    optuna.create_study(
+        study_name=study_name, storage=db_url, direction="minimize", load_if_exists=True
+    )
+    # try:
+    #     optuna.create_study(study_name="par_optuna_trials", storage=db_url, direction="minimize")
+    # except (optuna.exceptions.DuplicatedStudyError, sqlite3.OperationalError):
+    #     print("Study already exists. Loading existing study.")
 
     # Load the study, enqueue the first trial, and optimize.
     study = optuna.load_study(study_name="par_optuna_trials", storage=db_url)
     # * Enqueing caused an issue with trials being split across gpus.
-    # study.enqueue_trial(
-    #     {
-    #         "crop_size": 112,
-    #         "initial_learning_rate": 0.0001,
-    #         "input_scaling": 1.0,
-    #         "max_stride": 16,
-    #         "filters": 32,
-    #         "output_stride": 2,
-    #         "num_fc_units": 256,
-    #         "global_pool": True,
-    #         "class_vectors_loss_weight": 0.001,
-    #     }
-    # )
+    study.enqueue_trial(
+        {
+            "crop_size": 112,
+            "initial_learning_rate": 0.0001,
+            "input_scaling": 1.0,
+            "max_stride": 16,
+            "filters": 32,
+            "output_stride": 2,
+            "num_fc_units": 256,
+            "global_pool": True,
+            "class_vectors_loss_weight": 0.001,
+        }
+    )
     # Divide trials across tasks
     partial_objective = partial(objective, labels_file=labels_file, model_output_dir=model_output_dir)
     study.optimize(partial_objective, n_trials=(n_trials // n_tasks))
@@ -239,6 +252,7 @@ def main():
         required=True,
         help="Name of SQLite '.db' file; e.g. 'db.db'"
     )
+    parser.add_argument("--study-name", type=str, required=True, help="Optuna study name.")
     parser.add_argument("--labels-file", type=str, required=True, help="Path to SLEAP labels.")
     parser.add_argument("--slurm-output-dir", type=str, required=True, help="SLURM out & err dir.")
     parser.add_argument("--model-output-dir", type=str, required=True, help="Model output dir.")
@@ -255,7 +269,7 @@ def main():
     executor = submitit.AutoExecutor(folder=str(output_dir))
     executor.update_parameters(
         slurm_job_name=args.slurm_job_name,
-        tasks_per_node=args.n_tasks,  # nodes correspond to tasks
+        tasks_per_node=args.n_tasks,
         slurm_partition=args.partition,
         slurm_gpus_per_task=1,
         cpus_per_task=32,
@@ -269,6 +283,7 @@ def main():
         run_optuna_job,
         args.study_path,
         args.db_name,
+        args.study_name,
         args.n_tasks,
         args.n_trials,
         args.labels_file,
