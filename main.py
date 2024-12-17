@@ -272,8 +272,8 @@ def main():
         tasks_per_node=args.n_tasks,
         slurm_partition=args.partition,
         slurm_gpus_per_task=1,
-        cpus_per_task=32,
-        mem_gb=256,
+        cpus_per_task=16,
+        mem_gb=64,
         slurm_time=60*48,
         slurm_additional_parameters={"nodelist": args.nodelist},
     )
