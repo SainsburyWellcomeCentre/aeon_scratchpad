@@ -41,7 +41,7 @@ done
 
 # Infinite loop to rerun the job on failure
 while true; do
-    echo "Submitting job..."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Submitting job..."
 
     # Run the Python command and capture the job ID
     PYTHON_CMD="python main.py ${PYTHON_ARGS[@]}"
@@ -89,7 +89,7 @@ while true; do
         # Print updates from .out files
         for OUT_FILE in $OUT_FILES; do
             if [[ -f "$OUT_FILE" ]]; then
-                echo "----- latest log [$OUT_FILE] -----"
+                echo "----- $(date '+%Y-%m-%d %H:%M:%S') latest log [$OUT_FILE] -----"
                 tail -n 10 "$OUT_FILE"
                 echo ""
             fi
@@ -98,9 +98,9 @@ while true; do
         # Check for errors in .err files
         for ERR_FILE in $ERR_FILES; do
             if grep -q "srun: error:" "$ERR_FILE"; then
-                echo "Error detected in: $ERR_FILE"
-                echo "Restarting, will submit new job..."
+                echo "$(date '+%Y-%m-%d %H:%M:%S') Error detected in: $ERR_FILE"
                 tail -n 50 "$ERR_FILE"
+                echo "\n\n$(date '+%Y-%m-%d %H:%M:%S') Restarting, will submit new job..."
                 break 2
             fi
         done
@@ -117,7 +117,7 @@ while true; do
         done
 
         if $ALL_SUCCESS; then
-            echo "All tasks completed successfully. Exiting."
+            echo "$(date '+%Y-%m-%d %H:%M:%S') All tasks completed successfully. Exiting."
             exit 0
         fi
 
