@@ -319,7 +319,7 @@ def main():
         slurm_job_name=args.slurm_job_name,
         tasks_per_node=args.n_tasks,
         slurm_partition=args.partition,
-        gpus_per_node=2,
+        slurm_gpus_per_task=1,
         cpus_per_task=16,
         mem_gb=64,
         slurm_time=60*48,
