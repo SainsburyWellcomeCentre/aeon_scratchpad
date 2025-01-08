@@ -1,18 +1,18 @@
 """Parallelized Optuna hyperparameter optimization for SLEAP training."""
 
 import argparse
-from json import load
 import os
 import sqlite3
-from functools import partial
-from pathlib import Path
 import uuid
+from functools import partial
+from json import load
+from pathlib import Path
 
 import optuna
-from optuna.storages import RDBStorage
 import sleap
 import submitit
-from sleap.nn.config import *
+from optuna.storages import RDBStorage
+from sleap.nn.config import *  # noqa: F403
 from sleap.nn.inference import TopDownMultiClassPredictor
 
 # Constants
@@ -25,13 +25,10 @@ def create_cfg(optuna_params, labels_file, output_dir):
     parent_dir = str(Path(labels_file).parent)
     unique_suffix = str(uuid.uuid4())[:8]
     run_name = session_id + "_topdown_top.centered_instance_multiclass_" + unique_suffix
-    if output_dir is not None:
-        runs_folder = output_dir
-    else:
-        runs_folder = parent_dir + "/models"
+    runs_folder = output_dir if output_dir is not None else parent_dir + "/models"
     labels = sleap.load_file(labels_file)
 
-    cfg = TrainingJobConfig()
+    cfg = TrainingJobConfig()  # noqa: F405 (import * above)
     cfg.data.labels.training_labels = parent_dir + "/" + session_id + ".train.pkg.slp"
     cfg.data.labels.validation_labels = parent_dir + "/" + session_id + ".val.pkg.slp"
     cfg.data.labels.validation_fraction = 0.1
@@ -53,20 +50,20 @@ def create_cfg(optuna_params, labels_file, output_dir):
     cfg.optimization.early_stopping.plateau_patience = 10  # default is 10
 
     # configure nn and model
-    cfg.model.backbone.unet = UNetConfig(
+    cfg.model.backbone.unet = UNetConfig(  # noqa: F405 (import * above)
         max_stride=optuna_params["max_stride"],
         output_stride=optuna_params["output_stride"],
         filters=optuna_params["filters"],
         filters_rate=1.50,
         # up_interpolate=True, # save computations but may lower accuracy
     )
-    confmaps = CenteredInstanceConfmapsHeadConfig(
+    confmaps = CenteredInstanceConfmapsHeadConfig(  # noqa: F405 (import * above)
         anchor_part=anchor_part,
         sigma=1.5,  # 2.5,
         output_stride=optuna_params["output_stride"],
         loss_weight=1.0,
     )
-    class_vectors = ClassVectorsHeadConfig(
+    class_vectors = ClassVectorsHeadConfig(  # noqa: F405 (import * above)
         classes=[track.name for track in labels.tracks],
         output_stride=optuna_params["output_stride"],
         num_fc_layers=3,
@@ -74,7 +71,7 @@ def create_cfg(optuna_params, labels_file, output_dir):
         global_pool=optuna_params["global_pool"],
         loss_weight=optuna_params["class_vectors_loss_weight"],
     )
-    cfg.model.heads.multi_class_topdown = MultiClassTopDownConfig(
+    cfg.model.heads.multi_class_topdown = MultiClassTopDownConfig(  # noqa: F405 (import * above)
         confmaps=confmaps, class_vectors=class_vectors
     )
     # configure outputs
@@ -129,7 +126,7 @@ def compute_id_metrics(labels_gt, labels_pr, crop_size):
         print(f"- Precision: {precision}")
         print(f"- Recall: {recall}")
         print(f"- Accuracy: {accuracy}")
-    
+
     return metrics
 
 
@@ -140,10 +137,8 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir, save_outputs) 
     initial_learning_rate_suggest = trial.suggest_float("initial_learning_rate", 1e-5, 1e-3, log=True)
     max_stride_suggest = trial.suggest_int("max_stride", 16, 32, step=8)
     filters_suggest = trial.suggest_int("filters", 16, 64, step=16)
-    # output_stride_suggest = trial.suggest_categorical("output_stride", [2, 4])
     output_stride_suggest = trial.suggest_int("output_stride", 2, 4, step=2)
     num_fc_units_suggest = trial.suggest_int("num_fc_units", 128, 512, step=32)
-    # global_pool_suggest = trial.suggest_categorical("global_pool", [True, False])
     class_vectors_loss_weight_suggest = trial.suggest_float("class_vectors_loss_weight", 0.001, 1.0, log=True)
     # create config with selected params
     cfg = create_cfg(
@@ -153,7 +148,6 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir, save_outputs) 
             "max_stride": max_stride_suggest,
             "filters": filters_suggest,
             "output_stride": output_stride_suggest,
-            "output_stride": 2,
             "num_fc_units": num_fc_units_suggest,
             "global_pool": True,
             "class_vectors_loss_weight": class_vectors_loss_weight_suggest,
@@ -182,7 +176,7 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir, save_outputs) 
     if save_outputs:
         sleap.Labels.save_file(labels_pr, f"{model_directory}/labels_pr.val.slp")
     else:
-        os.system(f"rm -r {model_directory}")
+        os.system(f"rm -r {model_directory}")  # noqa: S605
     return last_epoch_val_loss
 
 
@@ -210,11 +204,11 @@ def run_optuna_job(
     os.system(f"datasette serve {db_path} &")  # noqa: S605
 
     # Create the Optuna study (if it doesn't already exist)
-    slurm_procid = int(os.environ.get("SLURM_PROCID"))
+    slurm_procid = int(os.environ.get("SLURM_PROCID"))  # type: ignore
     print(f"SLURM_PROCID: {slurm_procid}")
     if slurm_procid != 0:
         print("Waiting 10s for task 0 to create the database...")
-        os.system("sleep 10")
+        os.system("sleep 10")  # noqa: S605, S607
     storage = RDBStorage(db_url)
     optuna.create_study(
         study_name=study_name, storage=storage, direction="minimize", load_if_exists=True
@@ -237,12 +231,18 @@ def run_optuna_job(
             }
         )
     # Divide trials across tasks
-    partial_objective = partial(objective, labels_file=labels_file, model_output_dir=model_output_dir, save_outputs=save_outputs)
+    partial_objective = partial(
+        objective,
+        labels_file=labels_file,
+        model_output_dir=model_output_dir,
+        save_outputs=save_outputs
+    )
     study.optimize(partial_objective, n_trials=(n_trials // n_tasks))
     print(f"Task completed. Best params: {study.best_params}")
 
 
 def main():
+    """Parse command-line arguments and submit the sleap-optuna job."""
     parser = argparse.ArgumentParser(description="Run Optuna study with Submitit.")
     parser.add_argument(
         "--study-path",
@@ -263,7 +263,7 @@ def main():
     parser.add_argument("--partition", type=str, default="gpu_branco", help="SLURM partition.")
     parser.add_argument("--nodelist", type=str, default="gpu-sr675-34", help="SLURM node.")
     parser.add_argument("--n-tasks", type=int, default=2, help="Number of parallel SLURM tasks.")
-    parser.add_argument("--n-trials", type=int, default=100, help="Number of Optuna trials.")
+    parser.add_argument("--n-trials", type=int, default=75, help="Number of Optuna trials.")
     parser.add_argument("--slurm-job-name", type=str, default="par_optuna", help="SLURM job name.")
     parser.add_argument("--save-outputs", type=bool, default=False, help="Save outputs.")
     args = parser.parse_args()
@@ -276,7 +276,7 @@ def main():
         slurm_job_name=args.slurm_job_name,
         tasks_per_node=args.n_tasks,
         slurm_partition=args.partition,
-        slurm_gpus_per_task=1,
+        gpus_per_node=2,
         cpus_per_task=16,
         mem_gb=64,
         slurm_time=60*48,
