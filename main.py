@@ -181,6 +181,7 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir, save_outputs) 
 
 
 def run_optuna_job(
+        initialise,
         study_path,
         db_name,
         study_name,
@@ -188,57 +189,99 @@ def run_optuna_job(
         n_trials,
         labels_file,
         model_output_dir,
-        save_outputs
+        save_outputs,
+        executor
     ):
     """Creates and runs an Optuna study whose trials can be parallelized across processes."""
-    # Ensure the study directory exists
-    study_path = Path(study_path)
-    study_path.mkdir(parents=True, exist_ok=True)
+    try:
+        # Ensure the study directory exists
+        study_path = Path(study_path)
+        study_path.mkdir(parents=True, exist_ok=True)
 
-    # Define SQLite storage path
-    db_path = study_path / db_name
-    db_url = f"sqlite:////{db_path}"
+        # Define SQLite storage path
+        db_path = study_path / db_name
+        db_url = f"sqlite:////{db_path}"
 
-    # Initialize SQLite database and serve with Datasette
-    os.system(f"sqlite3 {db_path} 'VACUUM;'")  # noqa: S605
-    os.system(f"datasette serve {db_path} &")  # noqa: S605
+        # Initialize SQLite database and serve with Datasette
+        os.system(f"sqlite3 {db_path} 'VACUUM;'")  # noqa: S605
+        os.system(f"datasette serve {db_path} &")  # noqa: S605
 
-    # Create the Optuna study (if it doesn't already exist)
-    slurm_procid = int(os.environ.get("SLURM_PROCID"))  # type: ignore
-    print(f"SLURM_PROCID: {slurm_procid}")
-    if slurm_procid != 0:
-        print("Waiting 10s for task 0 to create the database...")
-        os.system("sleep 10")  # noqa: S605, S607
-    storage = RDBStorage(db_url)
-    optuna.create_study(
-        study_name=study_name, storage=storage, direction="minimize", load_if_exists=True
-    )
-
-    # Load the study, enqueue the first trial, and optimize.
-    study = optuna.load_study(study_name=study_name, storage=storage)
-    if slurm_procid == 0:
-        study.enqueue_trial(
-            {
-                "crop_size": 112,
-                "initial_learning_rate": 0.0001,
-                "input_scaling": 1.0,
-                "max_stride": 16,
-                "filters": 32,
-                "output_stride": 2,
-                "num_fc_units": 256,
-                "global_pool": True,
-                "class_vectors_loss_weight": 0.001,
-            }
+        # Create the Optuna study (if it doesn't already exist)
+        slurm_procid = int(os.environ.get("SLURM_PROCID"))  # type: ignore
+        print(f"SLURM_PROCID: {slurm_procid}")
+        if slurm_procid != 0 and initialise:
+            print("Waiting 30s for task 0 to create the database...")
+            os.system("sleep 30")   # noqa: S605, S607
+        storage = RDBStorage(db_url)
+        optuna.create_study(
+            study_name=study_name, storage=storage, direction="minimize", load_if_exists=True
         )
-    # Divide trials across tasks
-    partial_objective = partial(
-        objective,
-        labels_file=labels_file,
-        model_output_dir=model_output_dir,
-        save_outputs=save_outputs
-    )
-    study.optimize(partial_objective, n_trials=(n_trials // n_tasks))
-    print(f"Task completed. Best params: {study.best_params}")
+
+        # Load the study, enqueue the first trial, and optimize.
+        study = optuna.load_study(study_name=study_name, storage=storage)
+        # Print trials that already exist, if any
+        if len(study.trials) > 0:
+            print("Existing trials:")
+            for trial in study.trials:
+                print(f"Trial {trial.number}:")
+                print(f"  Params: {trial.params}")
+                print(f"  Value: {trial.value}")
+                print(f"  State: {trial.state}")
+                print(f"  Duration: {trial.duration}")
+        if slurm_procid == 0 and initialise:
+            study.enqueue_trial(
+                {
+                    "crop_size": 112,
+                    "initial_learning_rate": 0.0001,
+                    "input_scaling": 1.0,
+                    "max_stride": 16,
+                    "filters": 32,
+                    "output_stride": 2,
+                    "num_fc_units": 256,
+                    "global_pool": True,
+                    "class_vectors_loss_weight": 0.001,
+                }
+            )
+        # Divide trials across tasks
+        partial_objective = partial(
+            objective,
+            labels_file=labels_file,
+            model_output_dir=model_output_dir,
+            save_outputs=save_outputs
+        )
+        study.optimize(partial_objective, n_trials=(n_trials // n_tasks))
+        # Print all trial results
+        print("Task completed.")
+        print("All trials:")
+        for trial in study.trials:
+            print(f"Trial {trial.number}:")
+            print(f"  Params: {trial.params}")
+            print(f"  Value: {trial.value}")
+            print(f"  State: {trial.state}")
+            print(f"  Duration: {trial.duration}")
+        print(f"Best params: {study.best_params}")
+        
+    except Exception as e:
+        if "Unable to load frame" in str(e):
+            print("HPC file loading issue. Resubmitting job...")
+            initialise = False
+            job = executor.submit(
+                run_optuna_job,
+                initialise,
+                study_path,
+                db_name,
+                study_name,
+                n_tasks,
+                n_trials,
+                labels_file,
+                model_output_dir,
+                save_outputs,
+                executor
+            )
+            print(f"Submitted job ID: {job.job_id}")
+            raise
+        else:
+            raise
 
 
 def main():
@@ -284,8 +327,10 @@ def main():
     )
 
     # Submit the job
+    initialise = True
     job = executor.submit(
         run_optuna_job,
+        initialise,
         args.study_path,
         args.db_name,
         args.study_name,
@@ -293,7 +338,8 @@ def main():
         args.n_trials,
         args.labels_file,
         args.model_output_dir,
-        args.save_outputs
+        args.save_outputs,
+        executor
     )
     print(f"Submitted job ID: {job.job_id}")
 
