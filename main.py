@@ -2,10 +2,9 @@
 
 import argparse
 import os
-import sqlite3
+import sqlite3  # noqa: F401 (used in a os.system call)
 import uuid
 from functools import partial
-from json import load
 from pathlib import Path
 
 import optuna
@@ -190,7 +189,7 @@ def run_optuna_job(
         labels_file,
         model_output_dir,
         save_outputs,
-        executor
+        executor,
     ):
     """Creates and runs an Optuna study whose trials can be parallelized across processes."""
     try:
@@ -213,14 +212,13 @@ def run_optuna_job(
             print("Waiting 30s for task 0 to create the database...")
             os.system("sleep 30")   # noqa: S605, S607
         storage = RDBStorage(db_url)
-        optuna.create_study(
+        study = optuna.create_study(
             study_name=study_name, storage=storage, direction="minimize", load_if_exists=True
         )
 
-        # Load the study, enqueue the first trial, and optimize.
-        study = optuna.load_study(study_name=study_name, storage=storage)
         # Print trials that already exist, if any
         if len(study.trials) > 0:
+            print(f"Starting on trial {study.trials[-1].number}/{n_trials}.")
             print("Existing trials:")
             for trial in study.trials:
                 print(f"Trial {trial.number}:")
@@ -260,12 +258,16 @@ def run_optuna_job(
             print(f"  State: {trial.state}")
             print(f"  Duration: {trial.duration}")
         print(f"Best params: {study.best_params}")
-        
+
     except Exception as e:
-        if "Unable to load frame" in str(e):
-            print("HPC file loading issue. Resubmitting job...")
+        if (
+            "Unable to load frame" in str(e) 
+            or "sqlite3.OperationalError: database is locked" in str(e)
+        ):
+            trial_n = study.trials[-1].number  # type: ignore
+            print(f"File loading issue; errored on trial {trial_n}/{n_trials}. Resubmitting...")
             initialise = False
-            job = executor.submit(
+            executor.submit(
                 run_optuna_job,
                 initialise,
                 study_path,
@@ -276,9 +278,8 @@ def run_optuna_job(
                 labels_file,
                 model_output_dir,
                 save_outputs,
-                executor
+                executor,
             )
-            print(f"Submitted job ID: {job.job_id}")
             raise
         else:
             raise
@@ -306,7 +307,7 @@ def main():
     parser.add_argument("--partition", type=str, default="gpu_branco", help="SLURM partition.")
     parser.add_argument("--nodelist", type=str, default="gpu-sr675-34", help="SLURM node.")
     parser.add_argument("--n-tasks", type=int, default=2, help="Number of parallel SLURM tasks.")
-    parser.add_argument("--n-trials", type=int, default=75, help="Number of Optuna trials.")
+    parser.add_argument("--n-trials", type=int, default=150, help="Number of Optuna trials.")
     parser.add_argument("--slurm-job-name", type=str, default="par_optuna", help="SLURM job name.")
     parser.add_argument("--save-outputs", type=bool, default=False, help="Save outputs.")
     args = parser.parse_args()
