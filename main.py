@@ -2,7 +2,7 @@
 
 import argparse
 import os
-import sqlite3  # noqa: F401 (used in a os.system call)
+import sqlite3  # noqa: F401 (used in a os.system call) #type: ignore
 import uuid
 from functools import partial
 from pathlib import Path
@@ -27,7 +27,7 @@ def create_cfg(optuna_params, labels_file, output_dir):
     runs_folder = output_dir if output_dir is not None else parent_dir + "/models"
     labels = sleap.load_file(labels_file)
 
-    cfg = TrainingJobConfig()  # noqa: F405 (import * above)
+    cfg = TrainingJobConfig()  # noqa: F405 (import * above) # type: ignore
     cfg.data.labels.training_labels = parent_dir + "/" + session_id + ".train.pkg.slp"
     cfg.data.labels.validation_labels = parent_dir + "/" + session_id + ".val.pkg.slp"
     cfg.data.labels.validation_fraction = 0.1
@@ -49,20 +49,20 @@ def create_cfg(optuna_params, labels_file, output_dir):
     cfg.optimization.early_stopping.plateau_patience = 10  # default is 10
 
     # configure nn and model
-    cfg.model.backbone.unet = UNetConfig(  # noqa: F405 (import * above)
+    cfg.model.backbone.unet = UNetConfig(  # noqa: F405 (import * above) # type: ignore
         max_stride=optuna_params["max_stride"],
         output_stride=optuna_params["output_stride"],
         filters=optuna_params["filters"],
         filters_rate=1.50,
         # up_interpolate=True, # save computations but may lower accuracy
     )
-    confmaps = CenteredInstanceConfmapsHeadConfig(  # noqa: F405 (import * above)
+    confmaps = CenteredInstanceConfmapsHeadConfig(  # noqa: F405 (import * above) # type: ignore
         anchor_part=anchor_part,
         sigma=1.5,  # 2.5,
         output_stride=optuna_params["output_stride"],
         loss_weight=1.0,
     )
-    class_vectors = ClassVectorsHeadConfig(  # noqa: F405 (import * above)
+    class_vectors = ClassVectorsHeadConfig(  # noqa: F405 (import * above) # type: ignore
         classes=[track.name for track in labels.tracks],
         output_stride=optuna_params["output_stride"],
         num_fc_layers=3,
@@ -70,8 +70,10 @@ def create_cfg(optuna_params, labels_file, output_dir):
         global_pool=optuna_params["global_pool"],
         loss_weight=optuna_params["class_vectors_loss_weight"],
     )
-    cfg.model.heads.multi_class_topdown = MultiClassTopDownConfig(  # noqa: F405 (import * above)
-        confmaps=confmaps, class_vectors=class_vectors
+    cfg.model.heads.multi_class_topdown = (
+        MultiClassTopDownConfig(  # noqa: F405 (import * above) # type: ignore
+            confmaps=confmaps, class_vectors=class_vectors
+        )
     )
     # configure outputs
     cfg.outputs.run_name = run_name
@@ -131,6 +133,7 @@ def compute_id_metrics(labels_gt, labels_pr, crop_size):
 
 def objective(trial: optuna.Trial, labels_file, model_output_dir, save_outputs) -> float:
     """Objective function for Optuna to optimise."""
+    print(f"Starting trial {trial.number}.")
     # define parameters to optimise
     crop_size_suggest = trial.suggest_int("crop_size", 80, 128, step=16)
     initial_learning_rate_suggest = trial.suggest_float("initial_learning_rate", 1e-5, 1e-3, log=True)
@@ -189,100 +192,73 @@ def run_optuna_job(
         labels_file,
         model_output_dir,
         save_outputs,
-        executor,
     ):
     """Creates and runs an Optuna study whose trials can be parallelized across processes."""
-    try:
         # Ensure the study directory exists
-        study_path = Path(study_path)
-        study_path.mkdir(parents=True, exist_ok=True)
+    study_path = Path(study_path)
+    study_path.mkdir(parents=True, exist_ok=True)
 
-        # Define SQLite storage path
-        db_path = study_path / db_name
-        db_url = f"sqlite:////{db_path}"
+    # Define SQLite storage path
+    db_path = study_path / db_name
+    db_url = f"sqlite:////{db_path}"
 
-        # Initialize SQLite database and serve with Datasette
-        os.system(f"sqlite3 {db_path} 'VACUUM;'")  # noqa: S605
-        os.system(f"datasette serve {db_path} &")  # noqa: S605
+    # Initialize SQLite database and serve with Datasette
+    os.system(f"sqlite3 {db_path} 'VACUUM;'")  # noqa: S605
+    os.system(f"datasette serve {db_path} &")  # noqa: S605
 
-        # Create the Optuna study (if it doesn't already exist)
-        slurm_procid = int(os.environ.get("SLURM_PROCID"))  # type: ignore
-        print(f"SLURM_PROCID: {slurm_procid}")
-        if slurm_procid != 0 and initialise:
-            print("Waiting 30s for task 0 to create the database...")
-            os.system("sleep 30")   # noqa: S605, S607
-        storage = RDBStorage(db_url)
-        study = optuna.create_study(
-            study_name=study_name, storage=storage, direction="minimize", load_if_exists=True
-        )
+    # Create the Optuna study (if it doesn't already exist)
+    slurm_procid = int(os.environ.get("SLURM_PROCID"))  # type: ignore
+    print(f"SLURM_PROCID: {slurm_procid}")
+    if slurm_procid != 0 and initialise:
+        print("Waiting 30s for task 0 to create the database...")
+        os.system("sleep 30")   # noqa: S605, S607
+    storage = RDBStorage(db_url)
+    study = optuna.create_study(
+        study_name=study_name, storage=storage, direction="minimize", load_if_exists=True
+    )
 
-        # Print trials that already exist, if any
-        if len(study.trials) > 0:
-            print(f"Starting on trial {study.trials[-1].number}/{n_trials}.")
-            print("Existing trials:")
-            for trial in study.trials:
-                print(f"Trial {trial.number}:")
-                print(f"  Params: {trial.params}")
-                print(f"  Value: {trial.value}")
-                print(f"  State: {trial.state}")
-                print(f"  Duration: {trial.duration}")
-        if slurm_procid == 0 and initialise:
-            study.enqueue_trial(
-                {
-                    "crop_size": 112,
-                    "initial_learning_rate": 0.0001,
-                    "input_scaling": 1.0,
-                    "max_stride": 16,
-                    "filters": 32,
-                    "output_stride": 2,
-                    "num_fc_units": 256,
-                    "global_pool": True,
-                    "class_vectors_loss_weight": 0.001,
-                }
-            )
-        # Divide trials across tasks
-        partial_objective = partial(
-            objective,
-            labels_file=labels_file,
-            model_output_dir=model_output_dir,
-            save_outputs=save_outputs
-        )
-        study.optimize(partial_objective, n_trials=(n_trials // n_tasks))
-        # Print all trial results
-        print("Task completed.")
-        print("All trials:")
+    # Print trials that already exist, if any
+    if len(study.trials) > 0:
+        print(f"Starting on trial {study.trials[-1].number}/{n_trials}.")
+        print("Existing trials:")
         for trial in study.trials:
             print(f"Trial {trial.number}:")
             print(f"  Params: {trial.params}")
             print(f"  Value: {trial.value}")
             print(f"  State: {trial.state}")
             print(f"  Duration: {trial.duration}")
-        print(f"Best params: {study.best_params}")
-
-    except Exception as e:
-        if (
-            "Unable to load frame" in str(e) 
-            or "sqlite3.OperationalError: database is locked" in str(e)
-        ):
-            trial_n = study.trials[-1].number  # type: ignore
-            print(f"File loading issue; errored on trial {trial_n}/{n_trials}. Resubmitting...")
-            initialise = False
-            executor.submit(
-                run_optuna_job,
-                initialise,
-                study_path,
-                db_name,
-                study_name,
-                n_tasks,
-                n_trials,
-                labels_file,
-                model_output_dir,
-                save_outputs,
-                executor,
-            )
-            raise
-        else:
-            raise
+    if slurm_procid == 0 and initialise:
+        study.enqueue_trial(
+            {
+                "crop_size": 112,
+                "initial_learning_rate": 0.0001,
+                "input_scaling": 1.0,
+                "max_stride": 16,
+                "filters": 32,
+                "output_stride": 2,
+                "num_fc_units": 256,
+                "global_pool": True,
+                "class_vectors_loss_weight": 0.001,
+            }
+        )
+    # Divide trials across tasks
+    partial_objective = partial(
+        objective,
+        labels_file=labels_file,
+        model_output_dir=model_output_dir,
+        save_outputs=save_outputs
+    )
+    study.optimize(partial_objective, n_trials=(n_trials // n_tasks))
+    # Print all trial results
+    print("Task completed.")
+    print("All trials:")
+    for trial in study.trials:
+        print(f"Trial {trial.number}:")
+        print(f"  Params: {trial.params}")
+        print(f"  Value: {trial.value}")
+        print(f"  State: {trial.state}")
+        print(f"  Duration: {trial.duration}")
+    print(f"Best params: {study.best_params}")
 
 
 def main():
@@ -327,22 +303,36 @@ def main():
         slurm_additional_parameters={"nodelist": args.nodelist},
     )
 
-    # Submit the job
-    initialise = True
-    job = executor.submit(
-        run_optuna_job,
-        initialise,
-        args.study_path,
-        args.db_name,
-        args.study_name,
-        args.n_tasks,
-        args.n_trials,
-        args.labels_file,
-        args.model_output_dir,
-        args.save_outputs,
-        executor
-    )
-    print(f"Submitted job ID: {job.job_id}")
+    # Submit the job; catch exceptions and re-run if necessary.
+    handled_error, initialize = True, True
+    while handled_error:
+        job = executor.submit(
+            run_optuna_job,
+            initialize,
+            args.study_path,
+            args.db_name,
+            args.study_name,
+            args.n_tasks,
+            args.n_trials,
+            args.labels_file,
+            args.model_output_dir,
+            args.save_outputs,
+        )
+        print(f"Submitted job ID: {job.job_id}")
+        try:
+            _result = job.result()  # hangs until job is finished
+            handled_error = False
+        except Exception as e:
+            if (
+                "Unable to load frame" in str(e)
+                or "sqlite3.OperationalError: database is locked" in str(e)
+            ):
+                initialize = False
+                os.system(f"scancel {job.job_id}")  # Job clean-up # type: ignore # noqa: S605
+                print(f"Frame read or database error for {job.job_id}. See .err file for details.")
+                continue  # continue loop; don't reraise exception here as it may break loop
+            else:
+                raise
 
 
 if __name__ == "__main__":
