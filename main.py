@@ -38,7 +38,7 @@ def create_cfg(optuna_params, labels_file, output_dir):
     cfg.data.instance_cropping.crop_size = optuna_params["crop_size"]
 
     cfg.optimization.augmentation_config.rotate = True
-    cfg.optimization.epochs = 10
+    cfg.optimization.epochs = 75 # 600
     cfg.optimization.batch_size = 8  # 4
 
     cfg.optimization.initial_learning_rate = optuna_params["initial_learning_rate"]
@@ -46,7 +46,7 @@ def create_cfg(optuna_params, labels_file, output_dir):
     cfg.optimization.learning_rate_schedule.plateau_patience = 20  # default is 5
 
     cfg.optimization.early_stopping.stop_training_on_plateau = True
-    cfg.optimization.early_stopping.plateau_patience = 10  # default is 10
+    cfg.optimization.early_stopping.plateau_patience = 20  # default is 10
 
     # configure nn and model
     cfg.model.backbone.unet = UNetConfig(  # noqa: F405 (import * above) # type: ignore
@@ -86,14 +86,53 @@ def create_cfg(optuna_params, labels_file, output_dir):
     return cfg
 
 
-def compute_id_metrics(labels_gt, labels_pr, crop_size):
+def compute_metrics(labels_gt, labels_pr, crop_size):
     """Compute average ID accuracy between ground truth and predicted labels."""
+    track_names = [track.name for track in labels_gt.tracks]
+    max_instances = len(track_names)
+
     framepairs = sleap.nn.evals.find_frame_pairs(labels_gt, labels_pr)
     matches = sleap.nn.evals.match_frame_pairs(framepairs, scale=crop_size)
     positive_pairs = matches[0]
 
-    track_names = [track.name for track in labels_gt.tracks]
-    correct_id = {track_name: [] for track_name in track_names}
+    # initialize confusion matrix components
+    total_tp = total_fp = total_fn = total_tn = 0
+
+    for gt_frame, pr_frame in framepairs:
+        gt_count = len(gt_frame.instances)
+        pr_count = len(pr_frame.instances)
+
+        if gt_count > max_instances:
+            raise ValueError(
+                f"Ground truth frame {gt_frame.frame_idx} has {gt_count} instances, which is more than the maximum of {max_instances}."
+            )
+        if pr_count > max_instances:
+            raise ValueError(
+                f"Predicted frame {pr_frame.frame_idx} has {pr_count} instances, which is more than the maximum of {max_instances}."
+            )
+        
+        # compute TP, FP, FN, TN for this frame
+        tp = min(gt_count, pr_count)  # correct detections
+        fp = max(0, pr_count - gt_count)  # extra detections
+        fn = max(0, gt_count - pr_count)  # missed detections
+        tn = max_instances - max(gt_count, pr_count)  # unused "slots"
+
+        total_tp += tp
+        total_fp += fp
+        total_fn += fn
+        total_tn += tn
+
+    # detection metrics
+    detection_precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0
+    detection_recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0
+    detection_f1_score = (
+        2 * detection_precision * detection_recall / (detection_precision + detection_recall) if (detection_precision + detection_recall) > 0 else 0
+    )
+
+
+    # identity accuracy
+    correct_id = {track_name: 0 for track_name in track_names}
+    total_id_checks = {track_name: 0 for track_name in track_names}
 
     for positive_pair in positive_pairs:
         gt = (
@@ -101,37 +140,42 @@ def compute_id_metrics(labels_gt, labels_pr, crop_size):
             if isinstance(positive_pair[1], sleap.PredictedInstance)
             else positive_pair[1]
         )
-        correct_id[gt.track.name].append(
-            positive_pair[0].track.name == positive_pair[1].track.name
+        pr = (
+            positive_pair[1]
+            if isinstance(positive_pair[1], sleap.PredictedInstance)
+            else positive_pair[0]
         )
+        total_id_checks[gt.track.name] += 1
+        if gt.track.name == pr.track.name:
+            correct_id[gt.track.name] += 1
 
-    print("Total gt tracks:", len(labels_gt.tracks))
-    print("Total pr tracks:", len(labels_pr.tracks))
+    id_accuracy = (
+        sum(correct_id.values()) / sum(total_id_checks.values())
+        if sum(total_id_checks.values()) > 0
+        else 0.0
+    )
 
-    metrics = {}
-    for i in range(2):
-        track = track_names[i]
-        other_track = track_names[1 - i]
-        TP = correct_id[track].count(True)
-        FN = correct_id[track].count(False)
-        FP = correct_id[other_track].count(False)
-        precision = TP / (TP + FP) if TP + FP > 0 else 0
-        recall = TP / (TP + FN) if TP + FN > 0 else 0
-        accuracy = TP / (TP + FN + FP) if TP + FN + FP > 0 else 0
-        metrics[track] = {
-            "precision": precision,
-            "recall": recall,
-            "accuracy": accuracy,
-        }
-        print(f"Track: {track}")
-        print(f"- Precision: {precision}")
-        print(f"- Recall: {recall}")
-        print(f"- Accuracy: {accuracy}")
+    # print for debugging
+    print("Total TP: ", total_tp)
+    print("Total FP: ", total_fp)
+    print("Total FN: ", total_fn)
+    print("Total TN: ", total_tn)
+    print("Detection precision: ", detection_precision)
+    print("Detection recall: ", detection_recall)
+    print("Detection F1 score: ", detection_f1_score)
+    print("Correct ID: ", correct_id)
+    print("Total ID checks: ", total_id_checks)
+    print("ID accuracy: ", id_accuracy)
 
-    return metrics
+    return {
+        "detection_precision": detection_precision,
+        "detection_recall": detection_recall,
+        "detection_f1_score": detection_f1_score,
+        "id_accuracy": id_accuracy,
+    }
 
 
-def objective(trial: optuna.Trial, labels_file, model_output_dir, save_outputs) -> float:
+def objective(trial: optuna.Trial, labels_file, centroid_model_path, model_output_dir, save_outputs) -> float:
     """Objective function for Optuna to optimise."""
     print(f"Starting trial {trial.number}.")
     # define parameters to optimise
@@ -162,6 +206,7 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir, save_outputs) 
     trainer.train()
     model_directory = f"{trainer.config.outputs.runs_folder}/{trainer.config.outputs.run_name}{trainer.config.outputs.run_name_suffix}"
     predictor = TopDownMultiClassPredictor.from_trained_models(
+        centroid_model_path=centroid_model_path,
         confmap_model_path=model_directory,
     )
     labels_gt = sleap.load_file(f"{model_directory}/labels_gt.val.slp")
@@ -169,27 +214,38 @@ def objective(trial: optuna.Trial, labels_file, model_output_dir, save_outputs) 
     # get validation loss from last epoch to optimise
     history = trainer.keras_model.history
     last_epoch_val_loss = history.history["val_ClassVectorsHead_loss"][-1]
-    # compute confusion matrix
-    _id_metrics = compute_id_metrics(
+    # compute metrics
+    metrics = compute_metrics(
         labels_gt,
         labels_pr,
         crop_size_suggest
     )
+    detection_f1 = metrics["detection_f1_score"]
+    id_acc = metrics["id_accuracy"]
+    # harmonic mean for composite metric
+    composite_metric = (
+        (2 * detection_f1 * id_acc) / (detection_f1 + id_acc)
+        if (detection_f1 + id_acc) > 0
+        else 0
+    )
+    print("---")
+    print(f"Composite metric (harmonic mean of detection F1 and ID accuracy): {composite_metric}")
     if save_outputs:
         sleap.Labels.save_file(labels_pr, f"{model_directory}/labels_pr.val.slp")
     else:
         os.system(f"rm -r {model_directory}")  # noqa: S605
-    return last_epoch_val_loss
+    return composite_metric
 
 
 def run_optuna_job(
-        initialise,
+        initialize,
         study_path,
         db_name,
         study_name,
         n_tasks,
         n_trials,
         labels_file,
+        centroid_model_path,
         model_output_dir,
         save_outputs,
     ):
@@ -209,30 +265,41 @@ def run_optuna_job(
     # Create the Optuna study (if it doesn't already exist)
     slurm_procid = int(os.environ.get("SLURM_PROCID"))  # type: ignore
     print(f"SLURM_PROCID: {slurm_procid}")
-    if slurm_procid != 0 and initialise:
+    if slurm_procid != 0 and initialize:
         print("Waiting 30s for task 0 to create the database...")
         os.system("sleep 30")   # noqa: S605, S607
     storage = RDBStorage(db_url)
     study = optuna.create_study(
-        study_name=study_name, storage=storage, direction="minimize", load_if_exists=True
+        study_name=study_name, storage=storage, direction="maximize", load_if_exists=True
     )
 
     # Print trials that already exist, if any
-    if len(study.trials) > 0:
-        print(f"Starting on trial {study.trials[-1].number}/{n_trials}.")
-        print("Existing trials:")
-        for trial in study.trials:
+    completed_trials = [trial for trial in study.trials if trial.value is not None]
+    if len(completed_trials) >= n_trials:
+        print("Task completed.")
+        print("Completed trials:")
+        for trial in completed_trials:
             print(f"Trial {trial.number}:")
             print(f"  Params: {trial.params}")
             print(f"  Value: {trial.value}")
             print(f"  State: {trial.state}")
             print(f"  Duration: {trial.duration}")
-    if slurm_procid == 0 and initialise:
+        return
+    if len(completed_trials) > 0:
+        print("Ignoring uncompleted trials.")
+        print(f"Starting on trial {len(completed_trials)}/{n_trials}.")
+        print("Completed trials:")
+        for trial in completed_trials:
+            print(f"Trial {trial.number}:")
+            print(f"  Params: {trial.params}")
+            print(f"  Value: {trial.value}")
+            print(f"  State: {trial.state}")
+            print(f"  Duration: {trial.duration}")
+    if slurm_procid == 0 and initialize:
         study.enqueue_trial(
             {
                 "crop_size": 112,
                 "initial_learning_rate": 0.0001,
-                "input_scaling": 1.0,
                 "max_stride": 16,
                 "filters": 32,
                 "output_stride": 2,
@@ -245,14 +312,16 @@ def run_optuna_job(
     partial_objective = partial(
         objective,
         labels_file=labels_file,
+        centroid_model_path=centroid_model_path,
         model_output_dir=model_output_dir,
         save_outputs=save_outputs
     )
-    study.optimize(partial_objective, n_trials=(n_trials // n_tasks))
+    n_trials_left = n_trials - len(completed_trials)
+    study.optimize(partial_objective, n_trials=(n_trials_left // n_tasks))
     # Print all trial results
     print("Task completed.")
     print("All trials:")
-    for trial in study.trials:
+    for trial in completed_trials:
         print(f"Trial {trial.number}:")
         print(f"  Params: {trial.params}")
         print(f"  Value: {trial.value}")
@@ -264,26 +333,17 @@ def run_optuna_job(
 def main():
     """Parse command-line arguments and submit the sleap-optuna job."""
     parser = argparse.ArgumentParser(description="Run Optuna study with Submitit.")
-    parser.add_argument(
-        "--study-path",
-        type=str,
-        required=True,
-        help="Full path to where the shared RDB should be created."
-    )
-    parser.add_argument(
-        "--db-name",
-        type=str,
-        required=True,
-        help="Name of SQLite '.db' file; e.g. 'db.db'"
-    )
+    parser.add_argument("--study-path", type=str, required=True, help="Full path to where the shared RDB should be created.")
+    parser.add_argument("--db-name", type=str, required=True, help="Name of SQLite '.db' file; e.g. 'db.db'")
     parser.add_argument("--study-name", type=str, required=True, help="Optuna study name.")
     parser.add_argument("--labels-file", type=str, required=True, help="Path to SLEAP labels.")
+    parser.add_argument("--centroid-model-path", type=str, required=True, help="Path to the centroid model for making predictions and calculating metrics.")
     parser.add_argument("--slurm-output-dir", type=str, required=True, help="SLURM out & err dir.")
     parser.add_argument("--model-output-dir", type=str, required=True, help="Model output dir.")
     parser.add_argument("--partition", type=str, default="gpu_branco", help="SLURM partition.")
-    parser.add_argument("--nodelist", type=str, default="gpu-sr675-34", help="SLURM node.")
+    parser.add_argument("--nodelist", type=str, default=None, help="SLURM node.")
     parser.add_argument("--n-tasks", type=int, default=2, help="Number of parallel SLURM tasks.")
-    parser.add_argument("--n-trials", type=int, default=150, help="Number of Optuna trials.")
+    parser.add_argument("--n-trials", type=int, default=100, help="Number of Optuna trials.")
     parser.add_argument("--slurm-job-name", type=str, default="par_optuna", help="SLURM job name.")
     parser.add_argument("--save-outputs", type=bool, default=False, help="Save outputs.")
     args = parser.parse_args()
@@ -292,18 +352,50 @@ def main():
     output_dir = Path(args.slurm_output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     executor = submitit.AutoExecutor(folder=str(output_dir))
-    executor.update_parameters(
-        slurm_job_name=args.slurm_job_name,
-        tasks_per_node=args.n_tasks,
-        slurm_partition=args.partition,
-        slurm_gpus_per_task=1,
-        cpus_per_task=16,
-        mem_gb=64,
-        slurm_time=60*48,
-        slurm_additional_parameters={"nodelist": args.nodelist},
-    )
+    if args.nodelist is None and args.partition == "gpu_branco":
+        executor.update_parameters(
+            slurm_job_name=args.slurm_job_name,
+            tasks_per_node=args.n_tasks,
+            slurm_partition=args.partition,
+            gpus_per_node=2,
+            cpus_per_task=16,
+            mem_gb=256,
+            slurm_time=60*96,
+            slurm_additional_parameters={"exclude": "gpu-sr675-34"},
+        )
+    elif args.nodelist is None:
+        executor.update_parameters(
+            slurm_job_name=args.slurm_job_name,
+            tasks_per_node=args.n_tasks,
+            slurm_partition=args.partition,
+            gpus_per_node=2,
+            cpus_per_task=16,
+            mem_gb=256,
+            slurm_time=60*96,
+        )
+    elif args.nodelist == "gpu-sr675-34":
+        executor.update_parameters(
+            slurm_job_name=args.slurm_job_name,
+            tasks_per_node=args.n_tasks,
+            slurm_partition=args.partition,
+            slurm_gpus_per_task=1,
+            cpus_per_task=16,
+            mem_gb=256,
+            slurm_time=60*96,
+            slurm_additional_parameters={"nodelist": args.nodelist},
+        )
+    else:
+        executor.update_parameters(
+            slurm_job_name=args.slurm_job_name,
+            tasks_per_node=args.n_tasks,
+            slurm_partition=args.partition,
+            gpus_per_node=2,
+            cpus_per_task=16,
+            mem_gb=256,
+            slurm_time=60*96,
+            slurm_additional_parameters={"nodelist": args.nodelist},
+        )
 
-    # Submit the job; catch exceptions and re-run if necessary.
     handled_error, initialize = True, True
     while handled_error:
         job = executor.submit(
@@ -315,25 +407,70 @@ def main():
             args.n_tasks,
             args.n_trials,
             args.labels_file,
+            args.centroid_model_path,
             args.model_output_dir,
             args.save_outputs,
         )
         print(f"Submitted job ID: {job.job_id}")
+
         try:
-            _result = job.result()  # hangs until job is finished
+            _result = job.result()  # Hangs until job is finished.
             handled_error = False
         except Exception as e:
+            # Check for known “frame read” or “database locked” errors
             if (
                 "Unable to load frame" in str(e)
                 or "sqlite3.OperationalError: database is locked" in str(e)
+                or "TypeError: '>' not supported between instances" in str(e)
             ):
                 initialize = False
-                os.system(f"scancel {job.job_id}")  # Job clean-up # type: ignore # noqa: S605
-                print(f"Frame read or database error for {job.job_id}. See .err file for details.")
-                continue  # continue loop; don't reraise exception here as it may break loop
+                os.system(f"scancel {job.job_id}")  # Job clean-up
+                print(
+                    f"\033[91mFrame read or database error for job {job.job_id}. "
+                    f"See .err file(s) for details. "
+                    f"Re-submitting...\033[0m"
+                )
+                continue  # Re-submit without re-initializing
             else:
-                raise
-
+                # Check for OOM errors
+                found_kill = False
+                optuna_finished = False
+                for task_num in range(args.n_tasks):
+                    err_file = output_dir / f"{job.job_id}_{task_num}_log.err"
+                    if not err_file.is_file():
+                        print(f"{err_file} does not exist.")
+                        continue
+                    try:
+                        with open(err_file, "r") as ef:
+                            if (
+                                "Detected 1 oom-kill event(s)" in ef.read(),
+                                "Out of memory" in ef.read(),
+                            ):
+                                found_kill = True
+                                break
+                            elif (
+                                "Task completed." in ef.read()
+                            ):
+                                optuna_finished = True
+                                break
+                    except Exception as file_err:
+                        print(f"Could not read {err_file}: {file_err}")
+                if found_kill:
+                    initialize = False
+                    os.system(f"scancel {job.job_id}") # Job clean-up
+                    print(
+                        f"\033[91mOOM kill detected for job {job.job_id}. "
+                        f"See .err file(s) for details. "
+                        f"Re-submitting...\033[0m"
+                    )
+                    continue
+                elif optuna_finished:
+                    os.system(f"scancel {job.job_id}")
+                    print(f"\033[91mOptuna study finished for job {job.job_id}.\033[0m")
+                    handled_error = False
+                else:
+                    print(f"\033[91mUnhandled error for job {job.job_id}. Exiting...\033[0m")
+                    raise
 
 if __name__ == "__main__":
     main()
