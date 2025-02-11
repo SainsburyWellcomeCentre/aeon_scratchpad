@@ -11,7 +11,10 @@ from sleap.nn.config import *  # noqa: F403
 def train_with_best_params(best_params, labels_file, output_dir, run_suffix):
     """Train a model using the best parameters from Optuna optimization."""
     session_id = Path(labels_file).stem
-    run_name = f"{session_id}_topdown_top.centered_instance_multiclass_optimised_new_{run_suffix}"
+    run_name = f"{session_id}_topdown_top.centered_instance_multiclass_optimised_w_metrics{run_suffix}"
+    if os.path.exists(f"{output_dir}/{run_name}/best_model.h5"):
+        print(f"Model is already trained and saved in: {output_dir}/{run_name}")
+        return
     runs_folder = Path(output_dir)
 
     labels = sleap.load_file(labels_file)
@@ -123,12 +126,19 @@ def main():
 
     def job_function():
         top_params = fetch_top_n_params_from_study(args.study_name, args.db_path, n=args.top_n)
-        for i, params in enumerate(top_params):
-            run_suffix = f"{i+1}"
-            train_with_best_params(params, args.labels_file, args.model_output_dir, run_suffix)
-            if i == len(top_params) - 1:
-                print(f"Training completed for top {args.top_n} trials.")
-                os.system(f"scancel {os.environ['SLURM_JOB_ID']}")
+        if len(top_params) == 1:
+            run_suffix = ""
+            train_with_best_params(top_params[0], args.labels_file, args.model_output_dir, run_suffix)
+            print(f"Training completed.")
+            os.system(f"scancel {os.environ['SLURM_JOB_ID']}")
+        else:
+            for i, params in enumerate(top_params):
+                run_suffix = f"_{i+1}"
+
+                train_with_best_params(params, args.labels_file, args.model_output_dir, run_suffix)
+                if i == len(top_params) - 1:
+                    print(f"Training completed for top {args.top_n} trials.")
+                    os.system(f"scancel {os.environ['SLURM_JOB_ID']}")
 
 
     job = executor.submit(job_function)
