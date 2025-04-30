@@ -143,21 +143,3 @@ def save_all_experiment_data(
                     data_type,
                     data_dir
                 )
-    
-    # Save combined data for each period
-    for period in ['presocial', 'social', 'postsocial']:
-        period_dfs = []
-        for exp in experiments:
-            df = data_dict[exp['name']][period]
-            if not df.empty:
-                period_dfs.append(df)
-        
-        if period_dfs:
-            combined_df = pd.concat(period_dfs, ignore_index=True)
-            save_data_to_parquet(
-                combined_df,
-                'combined',
-                period,
-                data_type,
-                data_dir
-            )
