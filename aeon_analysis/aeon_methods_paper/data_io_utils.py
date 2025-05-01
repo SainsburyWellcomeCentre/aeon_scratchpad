@@ -14,7 +14,7 @@ def save_data_to_parquet(
 
     Args:
         df (pd.DataFrame): Data to save
-        experiment_name (str): Name of the experiment (use 'combined' for multi-experiment data)
+        experiment_name (str): Name of the experiment
         period_name (str): Period name (presocial, social, postsocial)
         data_type (str): Type of data (position, patch, foraging, rfid, sleep, explore)
         data_dir (Path): Directory to save the file
