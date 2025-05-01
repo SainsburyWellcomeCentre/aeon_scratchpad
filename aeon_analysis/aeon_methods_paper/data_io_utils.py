@@ -29,7 +29,7 @@ def save_data_to_parquet(
     df = df.copy()
     if 'period' not in df.columns:
         df['period'] = period_name
-    
+
     # Handle index properly for consistent loading
     if df.index.name and df.index.name != 'time':
         df = df.reset_index()
@@ -119,6 +119,7 @@ def load_data_from_parquet(
 
 def save_all_experiment_data(
     experiments: list,
+    periods: list,
     data_dict: dict,
     data_type: str,
     data_dir: Path
@@ -130,10 +131,11 @@ def save_all_experiment_data(
         data_dict (dict): Nested dictionary with structure {exp_name: {period_name: dataframe}}
         data_type (str): Type of data (position, patch, foraging, rfid, sleep, explore)
         data_dir (Path): Directory to save files
+        periods (list): List of periods to process
     """
     # Save individual experiment data
     for exp in experiments:
-        for period in ['presocial', 'social', 'postsocial']:
+        for period in periods:
             df = data_dict[exp['name']][period]
             if not df.empty:
                 save_data_to_parquet(
