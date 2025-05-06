@@ -1,6 +1,8 @@
 import os
-import pandas as pd
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
 
 
 def save_data_to_parquet(
@@ -145,3 +147,45 @@ def save_all_experiment_data(
                     data_type,
                     data_dir
                 )
+
+
+def excise_swaps(pos_df: pd.DataFrame, max_speed: float) -> pd.DataFrame:
+    """Excises swaps in the position data.
+
+    Args:
+        pos_df (pd.DataFrame): DataFrame containing position data of a single subject.
+        max_speed (float): Maximum speed (px/s) threshold over which we assume a swap.
+
+    Returns:
+        pd.DataFrame: DataFrame with swaps excised.
+    """
+    dt = pos_df.index.diff().total_seconds()
+    dx = pos_df["x"].diff()
+    dy = pos_df["y"].diff()
+    pos_df["inst_speed"] = np.sqrt(dx**2 + dy**2) / dt
+
+    # Identify jumps
+    jumps = (pos_df["inst_speed"] > max_speed)
+    shift_down = jumps.shift(1)
+    shift_down.iloc[0] = False
+    shift_up = jumps.shift(-1)
+    shift_up.iloc[len(jumps) - 1] = False
+    jump_starts = jumps & ~shift_down
+    jump_ends = jumps & ~shift_up
+    jump_start_indices = np.where(jump_starts)[0]
+    jump_end_indices = np.where(jump_ends)[0]
+
+    if np.any(jumps):
+
+        # Ensure the lengths match
+        if len(jump_start_indices) > len(jump_end_indices):  # jump-in-progress at start
+            jump_end_indices = np.append(jump_end_indices, len(pos_df) - 1)
+        elif len(jump_start_indices) < len(jump_end_indices):  # jump-in-progress at end
+            jump_start_indices = np.insert(jump_start_indices, 0, 0)
+
+        # Excise jumps by setting speed to nan in jump regions and dropping nans
+        for start, end in zip(jump_start_indices, jump_end_indices, strict=True):
+            pos_df.loc[pos_df.index[start]:pos_df.index[end], "inst_speed"] = np.nan
+        pos_df.dropna(subset=["inst_speed"], inplace=True)
+
+    return pos_df
