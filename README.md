@@ -1,6 +1,19 @@
 # aeon_scratchpad
 Scratchpad repo for Project Aeon
 
+## Set up environment
+Create a virtual environment and install the required packages using [`uv`](https://docs.astral.sh/uv/#installation)
+```bash
+uv venv
+uv pip install git+https://github.com/SainsburyWellcomeCentre/aeon_mecha.git@datajoint_pipeline movement
+```
+
+Activate the virtual environment.
+```bash
+source .venv/bin/activate # Mac/Linux
+.venv\Scripts\activate # Windows
+```
+
 ## Citation Policy
 
 If you use this software, please cite it as below:
