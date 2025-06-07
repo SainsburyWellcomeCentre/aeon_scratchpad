@@ -192,38 +192,38 @@ def load_all_position_data(
     experiments: List[Dict[str, str]],
     data_dir: Path = Path("/ceph/aeon/aeon/code/scratchpad/methods_paper_data"),
     set_time_index: bool = False
-) -> pd.DataFrame:
-    all_dfs = []
+) -> Dict[str, Dict[str, pd.DataFrame]]:
+    position_data_dict: Dict[str, Dict[str, pd.DataFrame]] = {}
 
     for exp in experiments:
         exp_name = exp["name"]
+        # collect only the periods that exist on this experiment
         periods = [
             p for p in ["presocial", "social", "postsocial"]
             if f"{p}_start" in exp and f"{p}_end" in exp
         ]
 
-        for period in tqdm(periods, desc=f"Loading {exp_name}", leave=False):
-            filename = data_dir / f"{exp_name}_{period}_position.parquet"
-            if not filename.exists():
+        position_data_dict[exp_name] = {}
+        for period in tqdm(periods, desc=f"Loading position for {exp_name}", leave=False):
+            filepath = data_dir / f"{exp_name}_{period}_positiondenoised.parquet"
+            if not filepath.exists():
+                # leave an empty DataFrame if no file found
+                position_data_dict[exp_name][period] = pd.DataFrame()
                 continue
 
-            df = pd.read_parquet(filename)
+            df = pd.read_parquet(filepath).dropna(axis=1, how="all")
             if df.empty:
+                position_data_dict[exp_name][period] = pd.DataFrame()
                 continue
 
-            df = df.dropna(axis=1, how="all")
-            if df.empty:
-                continue
-
+            # tag experiment and period
             df["experiment_name"] = exp_name
             df["period"] = period
+
+            # optionally set time index
             if set_time_index and "time" in df.columns:
                 df = df.set_index("time")
 
-            all_dfs.append(df)
+            position_data_dict[exp_name][period] = df
 
-    if all_dfs:
-        return pd.concat(all_dfs, ignore_index=True)
-    else:
-        print("No position data found for given experiments.")
-        return pd.DataFrame()
+    return position_data_dict
