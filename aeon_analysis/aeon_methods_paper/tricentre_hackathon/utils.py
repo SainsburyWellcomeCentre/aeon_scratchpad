@@ -1,11 +1,13 @@
-from pathlib import Path
-import numpy as np
-import pandas as pd
 import warnings
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List
-from tqdm import tqdm
+
+import numpy as np
+import pandas as pd
+from aeon.dj_pipeline.analysis.block_analysis import get_foraging_bouts
 from aeon.dj_pipeline.analysis.block_analysis import *
+from tqdm import tqdm
 
 
 def ensure_ts_arr_datetime(array: Any) -> np.ndarray:
@@ -191,13 +193,11 @@ def load_all_foraging_bouts(experiments: list[dict[str, str]]) -> dict[str, dict
 def load_all_position_data(
     experiments: List[Dict[str, str]],
     data_dir: Path = Path("/ceph/aeon/aeon/code/scratchpad/methods_paper_data"),
-    set_time_index: bool = False
 ) -> Dict[str, Dict[str, pd.DataFrame]]:
     position_data_dict: Dict[str, Dict[str, pd.DataFrame]] = {}
 
     for exp in experiments:
         exp_name = exp["name"]
-        # collect only the periods that exist on this experiment
         periods = [
             p for p in ["presocial", "social", "postsocial"]
             if f"{p}_start" in exp and f"{p}_end" in exp
@@ -205,9 +205,8 @@ def load_all_position_data(
 
         position_data_dict[exp_name] = {}
         for period in tqdm(periods, desc=f"Loading position for {exp_name}", leave=False):
-            filepath = data_dir / f"{exp_name}_{period}_positiondenoised.parquet"
+            filepath = data_dir / f"{exp_name}_{period}_position.parquet"
             if not filepath.exists():
-                # leave an empty DataFrame if no file found
                 position_data_dict[exp_name][period] = pd.DataFrame()
                 continue
 
@@ -220,10 +219,14 @@ def load_all_position_data(
             df["experiment_name"] = exp_name
             df["period"] = period
 
-            # optionally set time index
-            if set_time_index and "time" in df.columns:
-                df = df.set_index("time")
-
+            # restrict to the period time window
+            start = pd.to_datetime(exp[f"{period}_start"])
+            end = pd.to_datetime(exp[f"{period}_end"])
+            if "time" in df.columns:
+                df["time"] = pd.to_datetime(df["time"])
+                df = df[(df["time"] >= start) & (df["time"] < end)]
+            
             position_data_dict[exp_name][period] = df
 
     return position_data_dict
+
