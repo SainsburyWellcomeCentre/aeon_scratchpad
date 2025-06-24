@@ -403,13 +403,6 @@ def clean_swaps_refactor(df: pd.DataFrame, region_df: pd.DataFrame) -> pd.DataFr
         x_clean[:, :first_i] = x_raw[:, :first_i]
         y_clean[:, :first_i] = y_raw[:, :first_i]
 
-    # Helper to flush & apply local vote
-    def _flush_segment(start, end, votes_same, votes_swap):
-        if votes_swap > votes_same:
-            x_clean[:, start:end] = x_clean[::-1, start:end]
-            y_clean[:, start:end] = y_clean[::-1, start:end]
-            swapped_flags[start:end] = ~swapped_flags[start:end]
-
     # 6) Local-segment tracking
     # Initialize on first full-detect frame
     seg_start = first_i
@@ -419,6 +412,39 @@ def clean_swaps_refactor(df: pd.DataFrame, region_df: pd.DataFrame) -> pd.DataFr
     last_y = y_raw[:, first_i].copy()
     x_clean[:, first_i] = last_x
     y_clean[:, first_i] = last_y
+
+    # --- Helper functions ---
+    def _flush_segment(start, end, votes_same, votes_swap):
+        """Flush the current segment and apply local vote."""
+        if votes_swap > votes_same:
+            x_clean[:, start:end] = x_clean[::-1, start:end]
+            y_clean[:, start:end] = y_clean[::-1, start:end]
+            swapped_flags[start:end] = ~swapped_flags[start:end]
+
+    def _assign_single_detection(t, src_idx, dest_idx):
+        """Assign values from src_idx to dest_idx at time t."""
+        x_clean[dest_idx, t] = x_raw[src_idx, t]
+        y_clean[dest_idx, t] = y_raw[src_idx, t]
+        last_x[dest_idx] = x_raw[src_idx, t]
+        last_y[dest_idx] = y_raw[src_idx, t]
+
+    def _assign_full_frame(t, x_vals, y_vals):
+        """Assign full frame values to both identities at time t."""
+        x_clean[:, t] = x_vals
+        y_clean[:, t] = y_vals
+        last_x[:] = x_vals
+        last_y[:] = y_vals
+
+    def _update_votes(t):
+        """Determine if a swap occurred at time t and update vote counts accordingly."""
+        if np.allclose(x_raw[:, t], x_clean[:, t], equal_nan=True) and np.allclose(
+            y_raw[:, t], y_clean[:, t], equal_nan=True
+        ):
+            nonlocal votes_same
+            votes_same += 1
+        else:
+            nonlocal votes_swap
+            votes_swap += 1
 
     for t in tqdm(range(first_i + 1, T), desc="Cleaning frames"):
         present = np.isfinite(x_raw[:, t])
@@ -433,22 +459,17 @@ def clean_swaps_refactor(df: pd.DataFrame, region_df: pd.DataFrame) -> pd.DataFr
 
         # 1 detection → assign to closest
         if n_det == 1:
-            det_idx = np.where(present)[0][0]
+            src_idx = np.where(present)[0][0]
             dist_to_0 = np.hypot(
-                x_raw[det_idx, t] - last_x[0], y_raw[det_idx, t] - last_y[0]
+                x_raw[src_idx, t] - last_x[0], y_raw[src_idx, t] - last_y[0]
             )
             dist_to_1 = np.hypot(
-                x_raw[det_idx, t] - last_x[1], y_raw[det_idx, t] - last_y[1]
+                x_raw[src_idx, t] - last_x[1], y_raw[src_idx, t] - last_y[1]
             )
             if min(dist_to_0, dist_to_1) <= 90:
-                assign_idx = 0 if dist_to_0 <= dist_to_1 else 1
-                x_clean[assign_idx, t] = x_raw[det_idx, t]
-                y_clean[assign_idx, t] = y_raw[det_idx, t]
-                last_x[assign_idx], last_y[assign_idx] = (
-                    x_raw[det_idx, t],
-                    y_raw[det_idx, t],
-                )
-                votes_same += 1
+                dest_idx = 0 if dist_to_0 <= dist_to_1 else 1
+                _assign_single_detection(t, src_idx, dest_idx)
+                _update_votes(t)
             continue
 
         # 2 detections
@@ -474,10 +495,7 @@ def clean_swaps_refactor(df: pd.DataFrame, region_df: pd.DataFrame) -> pd.DataFr
 
         # Re-evaluate after reset
         if break_too_close:  # keep original assignment
-            x_clean[:, t] = x_raw[:, t]
-            y_clean[:, t] = y_raw[:, t]
-            last_x[:] = x_raw[:, t]
-            last_y[:] = y_raw[:, t]
+            _assign_full_frame(t, x_raw[:, t], y_raw[:, t])
             votes_same += 1
             continue
 
@@ -486,30 +504,22 @@ def clean_swaps_refactor(df: pd.DataFrame, region_df: pd.DataFrame) -> pd.DataFr
             # If both assignments are too far, skip
             if break_both_far:
                 continue
-            id_idx = 0 if min_dist_id0 <= min_dist_id1 else 1
-            closest_idx = int(np.argmin(dist_mat[id_idx]))
-            x_clean[closest_idx, t] = x_raw[id_idx, t]
-            y_clean[closest_idx, t] = y_raw[id_idx, t]
-            last_x[closest_idx], last_y[closest_idx] = (
-                x_raw[id_idx, t],
-                y_raw[id_idx, t],
-            )
-            # Question: Why votes_same here if we could be swapping?
-            votes_same += 1
+            dest_idx = 0 if min_dist_id0 <= min_dist_id1 else 1
+            src_idx = int(np.argmin(dist_mat[dest_idx]))
+            _assign_single_detection(t, src_idx, dest_idx)
+            _update_votes(t)
             continue
 
         if cost_same <= cost_swap:
-            x_clean[:, t] = x_raw[:, t]
-            y_clean[:, t] = y_raw[:, t]
+            x_vals = x_raw[:, t]
+            y_vals = y_raw[:, t]
             votes_same += 1
         else:
-            x_clean[:, t] = x_raw[::-1, t]
-            y_clean[:, t] = y_raw[::-1, t]
+            x_vals = x_raw[::-1, t]
+            y_vals = y_raw[::-1, t]
             swapped_flags[t] = True
             votes_swap += 1
-
-        last_x[:] = x_clean[:, t]
-        last_y[:] = y_clean[:, t]
+        _assign_full_frame(t, x_vals, y_vals)
 
     # 7) Flush the final segment
     _flush_segment(seg_start, T, votes_same, votes_swap)
@@ -527,7 +537,7 @@ def clean_swaps_refactor(df: pd.DataFrame, region_df: pd.DataFrame) -> pd.DataFr
     # 9) Merge back with original data (drop old x, y)
     df2_noxy = df2.drop(columns=["x", "y"])
     result = (
-        df2_noxy.merge(cleaned, on=[time_col, "identity_name"], how="left")
+        df2_noxy.merge(cleaned, on=[time_col, "identity_name"], how="right")
         .set_index(time_col)
         .sort_index()
     )
