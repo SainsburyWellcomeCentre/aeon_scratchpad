@@ -6,13 +6,12 @@ test/behaviour_and_sync/ to align the full-session centroid trace with each
 top_visual_loom trial window (5 s pre + 10 s post onset at 40 Hz = 600 frames).
 Produces a cropped centroid array and an overlay video for each session.
 
-Output per session (default — saves to X drive alongside existing pipeline outputs):
-  test/behaviour_and_sync/trials_top_visual_loom.bonsai_centroid.npy         (n_trials, 600, 2)
+Output per session (default — saves to /ceph alongside existing pipeline outputs):
+  test/behaviour_and_sync/trials_top_visual_loom.bonsai_centroid.pkl         (dict: x_position_trace, y_position_trace, cam_frames)
   test/behaviour_and_sync/trials_top_visual_loom.bonsai_centroid_overlay.avi
 
-Output per session (--test — saves locally for inspection before committing to X drive):
-  loom_tracking_results/{mouse_id}_{session}/trials_top_visual_loom.bonsai_centroid.npy
-  loom_tracking_results/{mouse_id}_{session}/meta.csv
+Output per session (--test — saves locally for inspection before committing to /ceph):
+  loom_tracking_results/{mouse_id}_{session}/trials_top_visual_loom.bonsai_centroid.pkl
   loom_tracking_results/{mouse_id}_{session}/{mouse_id}_{session}_overlay.avi
 
 Usage:
@@ -30,9 +29,9 @@ import pandas as pd
 
 # --- Config ---------------------------------------------------------------
 EXCEL_PATH        = Path(__file__).parent / "JF1xCAST Mice.xlsx"
-X_BASE            = Path("X:/Dario/Escape_SWC/JF1xCAST")
+DATA_ROOT         = Path("/ceph/branco/Dario/Escape_SWC/JF1xCAST")
 LOCAL_SAVE_DIR    = Path(__file__).parent / "loom_tracking_results"
-NPY_NAME          = "trials_top_visual_loom.bonsai_centroid.npy"
+PKL_NAME          = "trials_top_visual_loom.bonsai_centroid.pkl"
 OVERLAY_NAME      = "trials_top_visual_loom.bonsai_centroid_overlay.avi"
 PRE_FRAMES        = 200   # 5 s * 40 Hz — matches cutVideo_duration_params['top_visual_loom'][0] in extract_behaviour_and_sync_yl_AF.py
 POST_FRAMES       = 400   # 10 s * 40 Hz — matches cutVideo_duration_params['top_visual_loom'][1]
@@ -52,19 +51,18 @@ def strain_to_folder(strain: str) -> str:
     return "_JF1xCAST"
 
 
-def latest_session(mouse_dir: Path) -> Path | None:
-    """Return the most recent YYMMDD session folder that has the required pkls."""
-    sessions = sorted(
-        [d for d in mouse_dir.iterdir() if d.is_dir()],
+def valid_sessions(mouse_dir: Path) -> list[Path]:
+    """Return all YYMMDD session folders that have the required pkls and loom avi, oldest first."""
+    return sorted(
+        [
+            d for d in mouse_dir.iterdir()
+            if d.is_dir()
+            and (d / "test" / "behaviour_and_sync" / "events_dev3time.pkl").exists()
+            and (d / "test" / "behaviour_and_sync" / "events_camera.pkl").exists()
+            and (d / "test" / "behaviour_and_sync" / "trials_top_visual_loom.avi").exists()
+        ],
         key=lambda d: d.name,
-        reverse=True,
     )
-    for s in sessions:
-        sync_dir = s / "test" / "behaviour_and_sync"
-        if (sync_dir / "events_dev3time.pkl").exists() and \
-           (sync_dir / "events_camera.pkl").exists():
-            return s
-    return None
 
 
 def extract_trials(session_dir: Path):
@@ -160,26 +158,20 @@ def process_session(mouse_id: str, strain: str, session_dir: Path, test_run: boo
     if test_run:
         out_dir = LOCAL_SAVE_DIR / f"{mouse_id}_{session_dir.name}"
         out_dir.mkdir(parents=True, exist_ok=True)
-        npy_path     = out_dir / NPY_NAME
+        pkl_path     = out_dir / PKL_NAME
         overlay_path = out_dir / f"{mouse_id}_{session_dir.name}_overlay.avi"
-        meta = pd.DataFrame({
-            "trial_idx": range(len(cam_frames)),
-            "cam_frame": cam_frames,
-            "mouse_id":  mouse_id,
-            "strain":    strain,
-            "session":   session_dir.name,
-        })
-        meta.to_csv(out_dir / "meta.csv", index=False)
     else:
-        npy_path     = sync_dir / NPY_NAME
+        pkl_path     = sync_dir / PKL_NAME
         overlay_path = sync_dir / OVERLAY_NAME
 
-    np.save(npy_path, trials)
-    print(f"  Centroids saved: {npy_path}  ({len(trials)} trials)")
-
-    if not avi_path.exists():
-        print(f"  AVI not found, skipping overlay: {avi_path}")
-        return
+    centroid_data = {
+        "x_position_trace": trials[:, :, 0],
+        "y_position_trace": trials[:, :, 1],
+        "cam_frames":       np.array(cam_frames),
+    }
+    with open(pkl_path, "wb") as f:
+        pickle.dump(centroid_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+    print(f"  Centroids saved: {pkl_path}  ({len(trials)} trials)")
 
     make_overlay(trials, avi_path, overlay_path)
 
@@ -202,7 +194,7 @@ def main(test_run: bool):
     for _, row in mice.iterrows():
         mouse_id  = str(row["mouse_id"])
         strain    = str(row["Strain"])
-        mouse_dir = X_BASE / strain_to_folder(strain) / mouse_id
+        mouse_dir = DATA_ROOT / strain_to_folder(strain) / mouse_id
 
         print(f"Mouse {mouse_id} ({strain})")
 
@@ -210,12 +202,13 @@ def main(test_run: bool):
             print(f"  Folder not found: {mouse_dir}")
             continue
 
-        session_dir = latest_session(mouse_dir)
-        if session_dir is None:
+        sessions = valid_sessions(mouse_dir)
+        if not sessions:
             print(f"  No valid session found.")
             continue
 
-        process_session(mouse_id, strain, session_dir, test_run)
+        for session_dir in sessions:
+            process_session(mouse_id, strain, session_dir, test_run)
 
 
 if __name__ == "__main__":
