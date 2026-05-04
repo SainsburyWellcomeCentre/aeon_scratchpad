@@ -331,7 +331,7 @@ def process_session(bs_dir: Path,
         kalman["smoothed_x"], kalman["smoothed_y"], valid_trials
     )
 
-    session_date = bs_dir.parents[2].name  # .../MOUSE/DATE/test/behaviour_and_sync
+    session_date = bs_dir.parents[1].name  # .../MOUSE/DATE/test/behaviour_and_sync
     n_trials = int(kalman["n_trials"])
 
     records = []
