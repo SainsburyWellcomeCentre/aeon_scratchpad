@@ -27,6 +27,7 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "ipykernel" },
+    { name = "pandas-stubs" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -39,13 +40,14 @@ requires-dist = [
     { name = "ipykernel", marker = "extra == 'dev'" },
     { name = "numpy", specifier = ">=1.26.4" },
     { name = "pandas", specifier = ">=2.2" },
+    { name = "pandas-stubs", marker = "extra == 'dev'" },
     { name = "pyright", marker = "extra == 'dev'" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "pytest-mock", marker = "extra == 'dev'" },
     { name = "pyyaml" },
     { name = "ruff", marker = "extra == 'dev'" },
-    { name = "swc-aeon", specifier = "==0.2.0" },
+    { name = "swc-aeon", git = "https://github.com/SainsburyWellcomeCentre/aeon_api.git?rev=63fb47d661e11f978dedfe671c94c490100ce594" },
 ]
 provides-extras = ["dev"]
 
@@ -983,6 +985,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pandas-stubs"
+version = "3.0.5.260914"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c1/93/8948ae6c1e1e3d6833596fd266f7be2d27c1451b8be094975ad42c5e842e/pandas_stubs-3.0.5.260914.tar.gz", hash = "sha256:3f6fc1f147f68fd89c007105e7c94a948acb4ecd7eb20dc1c02e153c4ed5c250", size = 117622, upload-time = "2026-09-14T16:42:35.065Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9a/cb/5ad79e02a556cc23fed5816de0109fa8af660c66cfa5f4af74c3e8d4cd26/pandas_stubs-3.0.5.260914-py3-none-any.whl", hash = "sha256:39a1300c5c5c55fdf609e3476805decce5d5015539a4dcb683449f8feaeee2fb", size = 177344, upload-time = "2026-09-14T16:42:33.771Z" },
+]
+
+[[package]]
 name = "parso"
 version = "0.8.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1609,8 +1623,8 @@ wheels = [
 
 [[package]]
 name = "swc-aeon"
-version = "0.2.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.2.1.dev6+g63fb47d66"
+source = { git = "https://github.com/SainsburyWellcomeCentre/aeon_api.git?rev=63fb47d661e11f978dedfe671c94c490100ce594#63fb47d661e11f978dedfe671c94c490100ce594" }
 dependencies = [
     { name = "dotmap" },
     { name = "harp-python" },
@@ -1620,10 +1634,6 @@ dependencies = [
     { name = "pandas" },
     { name = "pydantic" },
     { name = "pydantic-yaml" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/95/bd/5fdc5c817379d32813b9559e9251e6835c04411bd6e239a58021b5989e1a/swc_aeon-0.2.0.tar.gz", hash = "sha256:c92179f89cc182c1be72568564a0cb184b1b921c139994b4be81425f701ce444", size = 146116, upload-time = "2026-03-16T14:13:53.563Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d0/d5/8b879cc6a295f6d22fc7027f9c7fc579af217a0d7fa46ced4ca8374f3ee8/swc_aeon-0.2.0-py3-none-any.whl", hash = "sha256:65b3964f54baafd6339959430a79e13231dc62313207ada52f9fe3605a4ec25c", size = 26887, upload-time = "2026-03-16T14:13:54.597Z" },
 ]
 
 [[package]]

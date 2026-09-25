@@ -9,7 +9,13 @@ requires-python = ">=3.11"
 description = "Data quality control metrics for Project Aeon datasets."
 license = "BSD-3-Clause"
 dependencies = [
-  "swc-aeon==0.2.0",
+  # aeon_api main, pinned to a commit, because these are not in the 0.2.0 release yet:
+  #   load(sort=False): https://github.com/SainsburyWellcomeCentre/aeon_api/pull/91
+  #   Binary reader:    https://github.com/SainsburyWellcomeCentre/aeon_api/pull/94
+  # Replace with a PyPI requirement (swc-aeon>=<next release>) once aeon_api releases
+  # them, and revisit when swc.aeon.qc lands:
+  #   https://github.com/SainsburyWellcomeCentre/aeon_api/pull/86
+  "swc-aeon @ git+https://github.com/SainsburyWellcomeCentre/aeon_api.git@63fb47d661e11f978dedfe671c94c490100ce594",
   "pyyaml",
   "numpy>=1.26.4",
   "pandas>=2.2",
@@ -17,6 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "pandas-stubs",
   "pytest",
   "pytest-cov",
   "pytest-mock",
@@ -62,10 +69,19 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+  "D103",    # skip adding docstrings for public functions
+  "D205",    # skip checking for blank line between summary and description
+  "S101",    # skip using assert
+  "PLR2004", # skip checking for "magic" values
+]
 "src/aeon_qc/octagon.py"  = ["D101", "D106", "D107"]
 "src/aeon_qc/social.py"   = ["D107", "D401"]
 "src/aeon_qc/foraging.py" = ["D101", "D107"]
 "src/aeon_qc/ephys.py"    = ["D107"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 
 [tool.pyright]
