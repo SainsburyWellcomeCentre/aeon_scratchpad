@@ -104,6 +104,13 @@ datasets:
       - {phase: postsocial, start: "2024-09-17T10-15-43"}
       - {phase: postsocial, start: "2024-09-19T14-33-09"}
 
+  # ONIX ephys test recording: NeuropixelsV2Beta headstage only, one epoch.
+  - name: socialephys01-aeonx1
+    root: /your/data/root/AEONX1/social-ephys0.1
+    schema: socialephys01
+    epochs:
+      - {phase: test, start: "2025-06-04T16-25-34"}
+
   - name: harris-ses-043
     root: /your/data/root/harris_benchmark_rawdata/ses-043_date-20251223
     schema: null  # TODO: port Harris lab schema

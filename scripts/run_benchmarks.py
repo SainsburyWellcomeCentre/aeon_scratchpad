@@ -7,6 +7,10 @@ Usage:
 Options:
     --benchmarks PATH   Path to benchmarks.yaml (default: benchmarks.yaml)
     --output DIR        Output root directory (default: benchmarks_output)
+
+Each dataset gives a ``root`` (or a ``roots`` list with the behaviour root first and,
+for example, the ephys root recorded on another machine second), an optional ``schema``
+registry key, and its epochs. See docs/tutorials/batch-qc.md for the manifest format.
 """
 
 import argparse
@@ -38,6 +42,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def dataset_roots(dataset: dict) -> list[str]:
+    """Return the dataset's roots as a list, accepting ``root`` (str or list) or ``roots``."""
+    roots = dataset.get("roots") or dataset.get("root") or []
+    return [roots] if isinstance(roots, str) else list(roots)
+
+
 def next_epoch_on_disk(root: str, start: pd.Timestamp) -> pd.Timestamp | None:
     """Return the start of the first epoch directory after `start`, or None."""
     epoch_dirs = sorted(d for d in Path(root).iterdir() if is_epoch_dir(d))
@@ -45,8 +55,28 @@ def next_epoch_on_disk(root: str, start: pd.Timestamp) -> pd.Timestamp | None:
     return later[0] if later else None
 
 
+def verdict(results: dict) -> str:
+    """One-line summary of an epoch's results for the console."""
+    counts = {"hb gaps": 0, "frames dropped": 0, "order": 0, "onix": 0, "no data": 0}
+    for df in results.values():
+        metric = df.attrs.get("metric")
+        if not df.attrs.get("data_found", True):
+            counts["no data"] += 1
+        if "second_before" in df.columns:
+            counts["hb gaps"] += len(df)
+        elif "n_dropped" in df.columns:
+            counts["frames dropped"] += int(df["n_dropped"].sum()) if len(df) else 0
+        elif metric == "timestamp_order":
+            counts["order"] += len(df)
+        elif metric == "harp_sync_integrity":
+            counts["onix"] += int(df.attrs.get("n_faults", 0))
+        elif metric == "onix_clock_sequence":
+            counts["onix"] += len(df)
+    return ", ".join(f"{k} {v}" for k, v in counts.items())
+
+
 def run_epoch(
-    root: str,
+    roots: list[str],
     schema: object,
     start: pd.Timestamp,
     end: pd.Timestamp | None,
@@ -57,20 +87,30 @@ def run_epoch(
     end_str = end.isoformat() if end is not None else "open"
     print(f"    start={start.isoformat()}  end={end_str}")
 
+    root = roots[0] if len(roots) == 1 else roots
     results = run_qc(root, schema, start=start, end=end)
 
     yaml_path = output_dir / f"{stem}.yaml"
     pkl_path = output_dir / f"{stem}.pkl"
-    generate_report(root, results, yaml_path, start=start, end=end)
+    generate_report(roots[0], results, yaml_path, start=start, end=end)
     save_results(results, pkl_path)
 
     for key, df in results.items():
         if not df.attrs.get("data_found", True):
             print(f"      {key}: NO DATA")
+        elif df.attrs.get("metric") == "harp_sync_drift":
+            worst = df.attrs.get("worst_chunk_max_abs_residual_ms")
+            print(f"      {key}: {df.attrs.get('n_chunks', 0)} chunk fit(s), worst residual {worst} ms")
+        elif df.attrs.get("metric") == "harp_sync_integrity":
+            print(f"      {key}: {len(df)} step(s), {df.attrs.get('n_faults', 0)} fault(s)")
+        elif df.attrs.get("metric") == "onix_hub_offset":
+            deviation = df.attrs.get("deviation_max_abs_ticks")
+            print(f"      {key}: {len(df)} file(s), max deviation {deviation} ticks")
         elif df.empty:
             print(f"      {key}: 0 events")
         else:
             print(f"      {key}: {len(df)} event(s)")
+    print(f"    => {verdict(results)}")
 
 
 def main() -> None:
@@ -81,18 +121,21 @@ def main() -> None:
         benchmarks = yaml.safe_load(f)
 
     for dataset in benchmarks["datasets"]:
-        root = dataset["root"]
-        if not Path(root).is_dir():
-            print(f"\n=== {dataset['name']} ===  SKIP: root does not exist: {root}")
+        roots = dataset_roots(dataset)
+        if not roots:
+            print(f"\n=== {dataset['name']} ===  SKIP: no root given")
+            continue
+        root = roots[0]
+        missing = [r for r in roots if not Path(r).is_dir()]
+        if missing:
+            print(f"\n=== {dataset['name']} ===  SKIP: root does not exist: {missing[0]}")
             continue
 
         schema_key = dataset.get("schema")
         epochs = dataset.get("epochs") or []
         epochs_auto = False
         if not epochs:
-            disk_epochs = sorted(
-                d for d in Path(root).iterdir() if is_epoch_dir(d)
-            )
+            disk_epochs = sorted(d for d in Path(root).iterdir() if is_epoch_dir(d))
             if not disk_epochs:
                 print(f"\n=== {dataset['name']} ===  SKIP: no epochs listed and none on disk")
                 continue
@@ -134,11 +177,13 @@ def main() -> None:
                     continue
                 load_start, load_end = start, derived[1]
                 qc_root: str = str(epoch_root)
-                schema = registry_schema if registry_schema is not None else build_schema(
-                    qc_root, start=load_start, end=load_end
+                schema = (
+                    registry_schema
+                    if registry_schema is not None
+                    else build_schema(qc_root, start=load_start, end=load_end)
                 )
                 print(f"  [{i + 1}/{len(epochs)}] {stem}")
-                run_epoch(qc_root, schema, load_start, load_end, output_dir, stem)
+                run_epoch([qc_root], schema, load_start, load_end, output_dir, stem)
                 continue
 
             if i + 1 < len(epochs):
@@ -148,9 +193,11 @@ def main() -> None:
             else:
                 end = next_epoch_on_disk(root, start)
 
-            schema = registry_schema if registry_schema is not None else build_schema(
-                root, start=start, end=end if end is not None else start + pd.Timedelta(hours=1)
-            )
+            schema_end = end if end is not None else start + pd.Timedelta(hours=1)
+            if registry_schema is not None and len(roots) == 1:
+                schema = registry_schema
+            else:
+                schema = build_schema(roots, start=start, end=schema_end)
 
             load_start, load_end = start, end
             if epochs_auto:
@@ -158,12 +205,11 @@ def main() -> None:
                 if derived is not None and derived[0] != start:
                     load_start, load_end = derived
                     print(
-                        "    filename-derived window: "
-                        f"{load_start.isoformat()} -> {load_end.isoformat()}"
+                        f"    filename-derived window: {load_start.isoformat()} -> {load_end.isoformat()}"
                     )
 
             print(f"  [{i + 1}/{len(epochs)}] {stem}")
-            run_epoch(root, schema, load_start, load_end, output_dir, stem)
+            run_epoch(roots, schema, load_start, load_end, output_dir, stem)
 
 
 if __name__ == "__main__":
