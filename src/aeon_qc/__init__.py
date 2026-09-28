@@ -1,6 +1,7 @@
 """Data quality control metrics for Project Aeon datasets."""
 
 from aeon_qc.environment import environment_state_durations, harp_sync_alerts, message_log_errors
+from aeon_qc.ephys import harp_sync_drift, harp_sync_integrity, onix_clock_sequence, onix_hub_offset
 from aeon_qc.epochs import epoch_gaps
 from aeon_qc.harp import harp_gaps
 from aeon_qc.heartbeat import heartbeat_duplicates, heartbeat_gaps
@@ -13,6 +14,7 @@ from aeon_qc.schemas import (
     schema_from_metadata,
     schema_from_registry,
 )
+from aeon_qc.sequence import timestamp_order
 from aeon_qc.sync import sync_delta
 from aeon_qc.video import dropped_frames, frame_rate_stability
 
@@ -28,6 +30,11 @@ __all__ = [
     "harp_sync_alerts",
     "message_log_errors",
     "environment_state_durations",
+    "timestamp_order",
+    "harp_sync_integrity",
+    "harp_sync_drift",
+    "onix_clock_sequence",
+    "onix_hub_offset",
     "run_qc",
     "generate_report",
     "save_results",

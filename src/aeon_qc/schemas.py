@@ -1,17 +1,8 @@
-"""Registry of known Aeon experiment schemas for use with ``run_qc()``.
-
-Each schema is a DotMap mapping device names to stream readers.
-
-- ``schema_from_metadata(root)`` — matches a root path component against REGISTRY
-  (e.g. ``social0.4`` = ``social04``); falls back to Heartbeat + Video discovery
-  from ``Metadata.yml``.
-- ``schema_from_root(root, start, end)`` — pure filesystem fallback (no ``Metadata.yml``
-  needed); discovers Heartbeat and Video streams only.
-
-"""
+"""Registry of known Aeon experiment schemas and schema discovery for ``run_qc``."""
 
 import datetime
 import re
+from collections.abc import Sequence
 from os import PathLike
 from pathlib import Path
 from typing import Any
@@ -23,7 +14,10 @@ from swc.aeon.io.api import load
 from swc.aeon.io.reader import Metadata as MetadataReader
 from swc.aeon.schema.streams import Device
 
-from aeon_qc import foraging, octagon, social
+import aeon_qc.foraging as _foraging
+import aeon_qc.octagon as _octagon
+import aeon_qc.onix as _onix
+import aeon_qc.social as _social
 
 EPOCH_DIR_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$")
 
@@ -35,7 +29,7 @@ exp02 = DotMap(
         Device("ClockSynchronizer", stream.Heartbeat),
         Device("VideoController", stream.Heartbeat),
         Device("ExperimentalMetadata", stream.Environment, stream.MessageLog),
-        Device("CameraTop", stream.Video, stream.Position, foraging.Region),
+        Device("CameraTop", stream.Video, stream.Position, _foraging.Region),
         Device("CameraEast", stream.Video),
         Device("CameraNest", stream.Video),
         Device("CameraNorth", stream.Video),
@@ -43,9 +37,9 @@ exp02 = DotMap(
         Device("CameraPatch2", stream.Video),
         Device("CameraSouth", stream.Video),
         Device("CameraWest", stream.Video),
-        Device("Nest", foraging.Weight),
-        Device("Patch1", stream.Heartbeat, foraging.Patch),
-        Device("Patch2", stream.Heartbeat, foraging.Patch),
+        Device("Nest", _foraging.Weight),
+        Device("Patch1", stream.Heartbeat, _foraging.Patch),
+        Device("Patch2", stream.Heartbeat, _foraging.Patch),
     ]
 )
 
@@ -56,8 +50,8 @@ social02 = DotMap(
         # Harp timing devices
         Device("ClockSynchronizer", stream.Heartbeat),
         Device("VideoController", stream.Heartbeat),
-        Device("Environment", social.Environment, social.SubjectData),
-        Device("CameraTop", stream.Video, social.Pose),
+        Device("Environment", _social.Environment, _social.SubjectData),
+        Device("CameraTop", stream.Video, _social.Pose),
         Device("CameraNorth", stream.Video),
         Device("CameraSouth", stream.Video),
         Device("CameraEast", stream.Video),
@@ -66,16 +60,16 @@ social02 = DotMap(
         Device("CameraPatch2", stream.Video),
         Device("CameraPatch3", stream.Video),
         Device("CameraNest", stream.Video),
-        Device("Nest", social.WeightRaw, social.WeightFiltered),
-        Device("Patch1", stream.Heartbeat, social.Patch),
-        Device("Patch2", stream.Heartbeat, social.Patch),
-        Device("Patch3", stream.Heartbeat, social.Patch),
-        Device("GateRfid", stream.Heartbeat, social.RfidEvents),
-        Device("NestRfid1", stream.Heartbeat, social.RfidEvents),
-        Device("NestRfid2", stream.Heartbeat, social.RfidEvents),
-        Device("Patch1Rfid", stream.Heartbeat, social.RfidEvents),
-        Device("Patch2Rfid", stream.Heartbeat, social.RfidEvents),
-        Device("Patch3Rfid", stream.Heartbeat, social.RfidEvents),
+        Device("Nest", _social.WeightRaw, _social.WeightFiltered),
+        Device("Patch1", stream.Heartbeat, _social.Patch),
+        Device("Patch2", stream.Heartbeat, _social.Patch),
+        Device("Patch3", stream.Heartbeat, _social.Patch),
+        Device("GateRfid", stream.Heartbeat, _social.RfidEvents),
+        Device("NestRfid1", stream.Heartbeat, _social.RfidEvents),
+        Device("NestRfid2", stream.Heartbeat, _social.RfidEvents),
+        Device("Patch1Rfid", stream.Heartbeat, _social.RfidEvents),
+        Device("Patch2Rfid", stream.Heartbeat, _social.RfidEvents),
+        Device("Patch3Rfid", stream.Heartbeat, _social.RfidEvents),
     ]
 )
 
@@ -87,8 +81,8 @@ social03 = DotMap(
         # Harp timing devices
         Device("ClockSynchronizer", stream.Heartbeat),
         Device("VideoController", stream.Heartbeat),
-        Device("Environment", social.Environment, social.SubjectData),
-        Device("CameraTop", stream.Video, social.Pose),
+        Device("Environment", _social.Environment, _social.SubjectData),
+        Device("CameraTop", stream.Video, _social.Pose),
         Device("CameraNorth", stream.Video),
         Device("CameraSouth", stream.Video),
         Device("CameraEast", stream.Video),
@@ -97,20 +91,20 @@ social03 = DotMap(
         Device("CameraPatch2", stream.Video),
         Device("CameraPatch3", stream.Video),
         Device("CameraNest", stream.Video),
-        Device("Nest", social.WeightRaw, social.WeightFiltered),
-        Device("Patch1", stream.Heartbeat, social.Patch),
-        Device("Patch2", stream.Heartbeat, social.Patch),
-        Device("Patch3", stream.Heartbeat, social.Patch),
-        Device("PatchDummy1", stream.Heartbeat, social.Patch),
-        Device("GateRfid", stream.Heartbeat, social.RfidEvents),
-        Device("GateEastRfid", stream.Heartbeat, social.RfidEvents),
-        Device("GateWestRfid", stream.Heartbeat, social.RfidEvents),
-        Device("NestRfid1", stream.Heartbeat, social.RfidEvents),
-        Device("NestRfid2", stream.Heartbeat, social.RfidEvents),
-        Device("Patch1Rfid", stream.Heartbeat, social.RfidEvents),
-        Device("Patch2Rfid", stream.Heartbeat, social.RfidEvents),
-        Device("Patch3Rfid", stream.Heartbeat, social.RfidEvents),
-        Device("PatchDummy1Rfid", stream.Heartbeat, social.RfidEvents),
+        Device("Nest", _social.WeightRaw, _social.WeightFiltered),
+        Device("Patch1", stream.Heartbeat, _social.Patch),
+        Device("Patch2", stream.Heartbeat, _social.Patch),
+        Device("Patch3", stream.Heartbeat, _social.Patch),
+        Device("PatchDummy1", stream.Heartbeat, _social.Patch),
+        Device("GateRfid", stream.Heartbeat, _social.RfidEvents),
+        Device("GateEastRfid", stream.Heartbeat, _social.RfidEvents),
+        Device("GateWestRfid", stream.Heartbeat, _social.RfidEvents),
+        Device("NestRfid1", stream.Heartbeat, _social.RfidEvents),
+        Device("NestRfid2", stream.Heartbeat, _social.RfidEvents),
+        Device("Patch1Rfid", stream.Heartbeat, _social.RfidEvents),
+        Device("Patch2Rfid", stream.Heartbeat, _social.RfidEvents),
+        Device("Patch3Rfid", stream.Heartbeat, _social.RfidEvents),
+        Device("PatchDummy1Rfid", stream.Heartbeat, _social.RfidEvents),
     ]
 )
 
@@ -121,23 +115,23 @@ social04 = DotMap(
         # Harp timing devices
         Device("ClockSynchronizer", stream.Heartbeat),
         Device("VideoController", stream.Heartbeat),
-        # Patches (UndergroundFeeder — same type as social02)
-        Device("Patch1", stream.Heartbeat, social.Patch),
-        Device("Patch2", stream.Heartbeat, social.Patch),
-        Device("Patch3", stream.Heartbeat, social.Patch),
-        Device("PatchDummy1", stream.Heartbeat, social.Patch),
+        # Patches (UndergroundFeeder, the same type as social02)
+        Device("Patch1", stream.Heartbeat, _social.Patch),
+        Device("Patch2", stream.Heartbeat, _social.Patch),
+        Device("Patch3", stream.Heartbeat, _social.Patch),
+        Device("PatchDummy1", stream.Heartbeat, _social.Patch),
         # Nest weight scale (registers 200, 202 confirmed on disk)
-        Device("Nest", social.WeightRaw, social.WeightFiltered),
+        Device("Nest", _social.WeightRaw, _social.WeightFiltered),
         # RFID readers (register 32, same as social02)
-        Device("NestRfid1", social.RfidEvents),
-        Device("NestRfid2", social.RfidEvents),
-        Device("GateRfid", social.RfidEvents),
-        Device("GateEastRfid", stream.Heartbeat, social.RfidEvents),
-        Device("GateWestRfid", stream.Heartbeat, social.RfidEvents),
-        Device("Patch1Rfid", social.RfidEvents),
-        Device("Patch2Rfid", social.RfidEvents),
-        Device("Patch3Rfid", social.RfidEvents),
-        Device("PatchDummy1Rfid", stream.Heartbeat, social.RfidEvents),
+        Device("NestRfid1", _social.RfidEvents),
+        Device("NestRfid2", _social.RfidEvents),
+        Device("GateRfid", _social.RfidEvents),
+        Device("GateEastRfid", stream.Heartbeat, _social.RfidEvents),
+        Device("GateWestRfid", stream.Heartbeat, _social.RfidEvents),
+        Device("Patch1Rfid", _social.RfidEvents),
+        Device("Patch2Rfid", _social.RfidEvents),
+        Device("Patch3Rfid", _social.RfidEvents),
+        Device("PatchDummy1Rfid", stream.Heartbeat, _social.RfidEvents),
         # Cameras (SpinnakerVideoSource)
         Device("CameraTop", stream.Video),
         Device("CameraWest", stream.Video),
@@ -162,8 +156,27 @@ octagon01 = DotMap(
         Device("Metadata", stream.Metadata),
         Device("CameraTop", stream.Video),
         Device("CameraColorTop", stream.Video),
-        Device("Photodiode", octagon.Photodiode),
-        Device("VideoController", octagon.VideoController),
+        Device("Photodiode", _octagon.Photodiode),
+        Device("VideoController", _octagon.VideoController),
+    ]
+)
+
+# Ephys test recording on AEONX1 (social-ephys0.1): a NeuropixelsV2Beta headstage only.
+socialephys01 = DotMap(
+    [
+        Device("Metadata", stream.Metadata),
+        Device("NeuropixelsV2Beta", _onix.NeuropixelsV2Beta, _onix.ProbeA, _onix.ProbeB, _onix.Bno055),
+    ]
+)
+
+# ForagingABC ephys recordings (AEON3/AEON4 abcEphys01): a NeuropixelsV2 headstage. The
+# behaviour devices of those experiments are not in any registry yet; pass the behaviour
+# root first and the ephys root second so schema_from_metadata / schema_from_filesystem
+# discover them alongside this entry.
+abcephys01 = DotMap(
+    [
+        Device("Metadata", stream.Metadata),
+        Device("NeuropixelsV2", _onix.NeuropixelsV2, _onix.ProbeA, _onix.ProbeB, _onix.Bno055),
     ]
 )
 
@@ -173,6 +186,8 @@ REGISTRY: dict[str, Any] = {
     "social03": social03,
     "social04": social04,
     "octagon01": octagon01,
+    "socialephys01": socialephys01,
+    "abcephys01": abcephys01,
 }
 
 # Schemas whose epoch directories are standalone sessions, not chunks of a
@@ -214,11 +229,12 @@ def normalise_timestamp(ts: str | datetime.datetime) -> pd.Timestamp:
 def match_registry(root: str | PathLike) -> str | None:
     """Return the REGISTRY key for *root*, or ``None`` if no path component matches.
 
-    Strips dots and lowercases each component
-    (e.g. ``social0.4`` = ``social04``) before checking against REGISTRY.
+    Strips dots and hyphens and lowercases each component
+    (e.g. ``social0.4`` = ``social04``, ``social-ephys0.1`` = ``socialephys01``) before
+    checking against REGISTRY.
     """
     for part in Path(root).parts:
-        key = part.replace(".", "").lower()
+        key = part.replace(".", "").replace("-", "").lower()
         if key in REGISTRY:
             return key
     return None
@@ -283,9 +299,12 @@ def schema_from_metadata(root: str | PathLike) -> DotMap | None:
 
     schema_devices: list[Device] = [Device("Metadata", stream.Metadata)]
     for device_name, device_cfg in devices_dotmap.items():
+        device_type = str(getattr(device_cfg, "Type", ""))
         is_harp = bool(getattr(device_cfg, "PortName", None))
-        is_camera = getattr(device_cfg, "Type", "") == "SpinnakerVideoSource"
-        if is_harp:
+        is_camera = device_type == "SpinnakerVideoSource"
+        if device_type.startswith("NeuropixelsV2"):
+            schema_devices.append(onix_device(device_name, device_type))
+        elif is_harp:
             schema_devices.append(Device(device_name, stream.Heartbeat))
         elif is_camera:
             schema_devices.append(Device(device_name, stream.Video))
@@ -293,45 +312,78 @@ def schema_from_metadata(root: str | PathLike) -> DotMap | None:
     return DotMap(schema_devices)
 
 
+def onix_device(name: str, type_or_name: str) -> Device:
+    """Return an ONIX headstage ``Device`` with its HarpSync, probe and BNO055 timing streams."""
+    headstage = _onix.NeuropixelsV2Beta if "Beta" in type_or_name else _onix.NeuropixelsV2
+    return Device(name, headstage, _onix.ProbeA, _onix.ProbeB, _onix.Bno055)
+
+
 def schema_from_filesystem(
-    root: str | PathLike,
+    root: str | PathLike | Sequence[str | PathLike],
     start: pd.Timestamp,
     end: pd.Timestamp,
 ) -> DotMap:
-    """Discover Heartbeat and Video devices by scanning files in the first epoch directory."""
-    first_epoch = first_epoch_dir(Path(root), start, end)
+    """Discover Heartbeat, Video and ONIX devices by scanning the first epoch directory of each root."""
+    roots = [Path(root)] if isinstance(root, str | PathLike) else [Path(r) for r in root]
     harp_devices: list[str] = []
     video_devices: list[str] = []
+    onix_devices: list[str] = []
 
-    for device_dir in sorted(first_epoch.iterdir()):
-        if not device_dir.is_dir():
-            continue
-        name = device_dir.name
-        if any(device_dir.glob(f"{name}_8_*.bin")):
-            harp_devices.append(name)
-        if any(device_dir.glob("*.avi")):
-            video_devices.append(name)
+    for base in roots:
+        first_epoch = base if is_epoch_dir(base) else first_epoch_dir(base, start, end)
+        for device_dir in sorted(first_epoch.iterdir()):
+            if not device_dir.is_dir():
+                continue
+            name = device_dir.name
+            if any(device_dir.glob(f"{name}_8_*.bin")):
+                harp_devices.append(name)
+            if any(device_dir.glob("*.avi")):
+                video_devices.append(name)
+            if any(device_dir.glob(f"{name}_HarpSync_*.csv")):
+                onix_devices.append(name)
 
     schema_devices: list[Device] = [Device("Metadata", stream.Metadata)]
     for name in harp_devices:
         schema_devices.append(Device(name, stream.Heartbeat))
     for name in video_devices:
         schema_devices.append(Device(name, stream.Video))
+    for name in onix_devices:
+        schema_devices.append(onix_device(name, name))
 
     return DotMap(schema_devices)
 
 
 def build_schema(
-    root: str | PathLike,
+    root: str | PathLike | Sequence[str | PathLike],
     start: pd.Timestamp,
     end: pd.Timestamp,
 ) -> DotMap:
-    """Return the best available schema, trying registry, then Metadata.yml, then filesystem."""
-    return (
-        schema_from_registry(root)
-        or schema_from_metadata(root)
-        or schema_from_filesystem(root, start, end)
-    )
+    """Return the best available schema, trying registry, then Metadata.yml, then filesystem.
+
+    With several roots the registry and ``Metadata.yml`` lookups use the first root (the
+    behaviour dataset); ONIX devices found in the remaining roots (for example an ephys
+    dataset recorded on another machine) are appended unless already present.
+
+    Args:
+        root: Dataset root path, or a list of roots with the behaviour root first.
+        start: Left bound of the time range, used for filesystem discovery.
+        end: Right bound of the time range, used for filesystem discovery.
+
+    Returns:
+        A DotMap of devices to stream readers.
+
+    """
+    roots: list[str | PathLike] = [root] if isinstance(root, str | PathLike) else list(root)
+    schema = schema_from_registry(roots[0]) or schema_from_metadata(roots[0])
+    if schema is None:
+        return schema_from_filesystem(roots, start, end)
+    if len(roots) > 1:
+        extra = schema_from_filesystem(roots[1:], start, end)
+        for name, streams in extra.items():
+            if name not in schema and isinstance(streams, dict) and "HarpSync" in streams:
+                schema[name] = streams
+    return schema
+
 
 def diagnose_devices(
     root: str | PathLike,
@@ -347,12 +399,10 @@ def diagnose_devices(
     # Source 1: registry (path-based match)
     registry_schema = schema_from_registry(root)
     registry_devices = (
-        {name for name in registry_schema if name != "Metadata"}
-        if registry_schema is not None
-        else None
+        {name for name in registry_schema if name != "Metadata"} if registry_schema is not None else None
     )
 
-    # Source 2: Metadata.yml — full device list
+    # Source 2: Metadata.yml, the full device list
     devices_dotmap = load_metadata_devices(root)
     metadata_devices = set(devices_dotmap.keys()) if devices_dotmap is not None else None
 
