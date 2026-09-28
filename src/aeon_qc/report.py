@@ -162,31 +162,22 @@ def run_qc(
                 end=end_ts,
                 data=loaded.get("EnvironmentState"),
             )
-        sync_fit = None
-        clock_rate = None
         for stream_name, reader in streams.items():
             if isinstance(reader, HarpSync):
                 key = f"{device_name}.{stream_name}"
                 data = loaded.get(stream_name)
                 results[key] = harp_sync_integrity(root, reader, start=start_ts, end=end_ts, data=data)
-                drift = harp_sync_drift(root, reader, start=start_ts, end=end_ts, data=data)
-                results[f"{key}.drift"] = drift
-                sync_fit = drift.attrs.get("fit")
-                clock_rate = drift.attrs.get("clock_rate_hz")
-        for stream_name, reader in streams.items():
-            if isinstance(reader, Binary) and hasattr(reader, "uniform"):
+                results[f"{key}.drift"] = harp_sync_drift(
+                    root, reader, start=start_ts, end=end_ts, data=data
+                )
+            elif isinstance(reader, Binary) and hasattr(reader, "uniform"):
                 results[f"{device_name}.{stream_name}"] = onix_clock_sequence(
-                    root,
-                    reader,
-                    start=start_ts,
-                    end=end_ts,
-                    clock_rate_hz=clock_rate,
-                    sync_fit=sync_fit,
+                    root, reader, start=start_ts, end=end_ts
                 )
                 hub_name = stream_name.removesuffix("Clock") + "HubSyncCounter"
                 if hub_name in streams:
                     results[f"{device_name}.{hub_name}"] = onix_hub_offset(
-                        root, reader, streams[hub_name], start=start_ts, end=end_ts, sync_fit=sync_fit
+                        root, reader, streams[hub_name], start=start_ts, end=end_ts
                     )
 
     return results
@@ -686,6 +677,7 @@ def harp_sync_drift_section(df: pd.DataFrame) -> dict[str, Any]:
         "data_found": df.attrs.get("data_found", True),
         "n_sync_events": int(df.attrs.get("n_sync_events", 0)),
         "n_chunks": int(df.attrs.get("n_chunks", 0)),
+        "n_clock_resets": int(df.attrs.get("n_clock_resets", 0)),
         "worst_chunk_max_abs_residual_ms": optional_float(
             df.attrs.get("worst_chunk_max_abs_residual_ms"), 4
         ),

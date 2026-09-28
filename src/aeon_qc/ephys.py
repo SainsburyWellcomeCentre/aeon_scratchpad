@@ -2,6 +2,7 @@
 
 import datetime
 from collections.abc import Iterator
+from dataclasses import dataclass
 from os import PathLike
 from pathlib import Path
 
@@ -196,10 +197,12 @@ def harp_sync_drift(
 
     Ephys data is placed on Harp time with one linear fit per hourly chunk, as
     ``swc.aeon.io.reader.HarpSyncAlignment`` does. The residual of every sync record
-    against its chunk's fit is kept. A single fit over the whole window is also returned
-    in ``attrs["fit"]`` for placing QC events on Harp time. The fits use ``harp_time``
-    (``Value.HarpTime``). That column is the true Harp second in every recording regardless
-    of the offset in the ``Seconds`` column (see ``aeon_qc.reader.HarpSync``).
+    against its chunk's fit is kept. An ONIX restart resets the acquisition clock. The
+    records are split where the clock steps backwards and each segment of a chunk is
+    fitted on its own. A single fit over the largest segment of the window is also
+    returned in ``attrs["fit"]``. The fits use ``harp_time`` (``Value.HarpTime``). That
+    column is the true Harp second in every recording regardless of the offset in the
+    ``Seconds`` column (see ``aeon_qc.reader.HarpSync``).
 
     Args:
         root: Dataset root path or paths.
@@ -216,9 +219,10 @@ def harp_sync_drift(
         - chunk (Timestamp): The hourly chunk the record was fitted in.
         - device (str): The reader pattern.
 
-        ``attrs`` hold ``chunks`` (a DataFrame with one row per chunk: ``n_sync_events``,
-        ``clock_rate_hz``, ``clock_rate_ppm`` and ``max_abs_residual_ms``), ``n_chunks``,
-        ``worst_chunk_max_abs_residual_ms``, the whole-window fit's ``clock_rate_hz`` and
+        ``attrs`` hold ``chunks`` (a DataFrame with one row per chunk and clock segment:
+        ``segment``, ``n_sync_events``, ``clock_rate_hz``, ``clock_rate_ppm`` and
+        ``max_abs_residual_ms``), ``n_chunks``, ``n_clock_resets``,
+        ``worst_chunk_max_abs_residual_ms``, the largest segment's ``clock_rate_hz`` and
         ``clock_rate_ppm``, and ``fit`` as its ``(slope, intercept)`` mapping ticks to Harp
         seconds.
     """
@@ -244,23 +248,26 @@ def harp_sync_drift(
     clock = data["clock"].to_numpy(dtype=np.float64)
     harp = data["harp_time"].to_numpy(dtype=np.float64)
     chunks = chunk(pd.DatetimeIndex(data.index))
+    segment = clock_segments(clock)
     residuals = np.full(len(data), np.nan)
     rows = []
     for key in chunks.unique():
-        mask = np.asarray(chunks == key)
-        row = {"chunk": key, "n_sync_events": int(mask.sum())}
-        if mask.sum() >= MIN_SYNC_EVENTS:
-            slope, intercept = fit_line(clock[mask], harp[mask])
-            residuals[mask] = harp[mask] - (slope * clock[mask] + intercept)
-            rate = 1.0 / slope
-            row.update(
-                clock_rate_hz=rate,
-                clock_rate_ppm=(rate / NOMINAL_CLOCK_HZ - 1.0) * 1e6,
-                max_abs_residual_ms=float(np.abs(residuals[mask]).max() * 1000),
-            )
-        rows.append(row)
+        for seg in np.unique(segment[np.asarray(chunks == key)]):
+            mask = np.asarray(chunks == key) & (segment == seg)
+            row = {"chunk": key, "segment": int(seg), "n_sync_events": int(mask.sum())}
+            if mask.sum() >= MIN_SYNC_EVENTS:
+                slope, intercept = fit_line(clock[mask], harp[mask])
+                residuals[mask] = harp[mask] - (slope * clock[mask] + intercept)
+                rate = 1.0 / slope
+                row.update(
+                    clock_rate_hz=rate,
+                    clock_rate_ppm=(rate / NOMINAL_CLOCK_HZ - 1.0) * 1e6,
+                    max_abs_residual_ms=float(np.abs(residuals[mask]).max() * 1000),
+                )
+            rows.append(row)
     chunk_table = pd.DataFrame(rows).set_index("chunk")
-    slope, intercept = fit_line(clock, harp)
+    largest = np.bincount(segment).argmax()
+    slope, intercept = fit_line(clock[segment == largest], harp[segment == largest])
     rate = 1.0 / slope
 
     result = pd.DataFrame(
@@ -275,6 +282,7 @@ def harp_sync_drift(
             "n_sync_events": len(data),
             "nominal_clock_hz": NOMINAL_CLOCK_HZ,
             "n_chunks": len(chunk_table),
+            "n_clock_resets": int(segment.max()),
             "chunks": chunk_table,
             "worst_chunk_max_abs_residual_ms": None if worst is None or pd.isna(worst) else float(worst),
             "clock_rate_hz": float(rate),
@@ -285,10 +293,82 @@ def harp_sync_drift(
     return result
 
 
+def clock_segments(clock: np.ndarray) -> np.ndarray:
+    """Number the clock domains of a tick sequence, starting a new one at each backwards step."""
+    return np.concatenate(([0], np.cumsum(np.diff(clock) < 0)))
+
+
 def file_index(path: Path) -> int:
     """Return the integer write-order suffix of a numbered ONIX binary file, or 0."""
     suffix = path.stem.rsplit("_", 1)[-1]
     return int(suffix) if suffix.isdigit() else 0
+
+
+def read_edge_ticks(path: Path, dtype: DTypeLike) -> tuple[int, int] | None:
+    """Return the first and last value of a flat binary file, or None when it is empty."""
+    item = np.dtype(dtype).itemsize
+    count = path.stat().st_size // item
+    if count == 0:
+        return None
+    with open(path, "rb") as f:
+        first = np.fromfile(f, dtype=dtype, count=1)
+        f.seek((count - 1) * item)
+        last = np.fromfile(f, dtype=dtype, count=1)
+    return int(first[0]), int(last[0])
+
+
+def harp_sync_fits(epoch_dir: Path, device: str) -> list[tuple[float, float]]:
+    """Fit Harp time on ONIX clock ticks for each clock domain of an epoch's HarpSync records.
+
+    An ONIX restart resets the acquisition clock. The records are split where the clock
+    steps backwards and each segment is fitted on its own, in order.
+
+    Args:
+        epoch_dir: The epoch directory holding ``<device>/<device>_HarpSync_*.csv``.
+        device: The ONIX device name, for example ``NeuropixelsV2``.
+
+    Returns:
+        ``(slope, intercept)`` per clock domain, mapping ticks to Harp seconds. Empty when
+        the epoch has fewer than two usable records.
+    """
+    data = load(epoch_dir, HarpSync(f"{device}_HarpSync_*"))
+    if len(data) < MIN_SYNC_EVENTS:
+        return []
+    clock = data["clock"].to_numpy(dtype=np.float64)
+    harp = data["harp_time"].to_numpy(dtype=np.float64)
+    segment = clock_segments(clock)
+    fits = []
+    for seg in np.unique(segment):
+        mask = segment == seg
+        if mask.sum() >= MIN_SYNC_EVENTS:
+            fits.append(fit_line(clock[mask], harp[mask]))
+    return fits
+
+
+@dataclass
+class ClockFile:
+    """A numbered ONIX binary file placed on Harp time through its epoch's HarpSync fit."""
+
+    path: Path
+    first_tick: int
+    last_tick: int
+    fit: tuple[float, float] | None
+    """``(slope, intercept)`` mapping ticks to Harp seconds. None when the epoch has no HarpSync."""
+    tick_lo: float
+    """Window start in ticks (``-inf`` without a fit)."""
+    tick_hi: float
+    """Window end in ticks (``inf`` without a fit or without an end)."""
+
+    def seconds(self, ticks: np.ndarray) -> np.ndarray:
+        """Convert ticks to Harp seconds with the fit, or to NaN without one."""
+        if self.fit is None:
+            return np.full(np.shape(ticks), np.nan)
+        return HarpSyncAlignment.estimate_harp_seconds(np.asarray(ticks, dtype=np.float64), *self.fit)
+
+    @property
+    def rate_hz(self) -> float:
+        """Ticks per second from the fit, or the nominal rate without one."""
+        return 1.0 / self.fit[0] if self.fit is not None else float(NOMINAL_CLOCK_HZ)
 
 
 def onix_clock_files(
@@ -296,74 +376,113 @@ def onix_clock_files(
     reader: Binary,
     start: datetime.datetime,
     end: datetime.datetime | None = None,
-) -> list[Path]:
-    """Find the numbered clock files for the epochs overlapping a time window.
+) -> list[ClockFile]:
+    """Find the clock files whose samples overlap a time window.
 
-    ONIX binary files carry no timestamp and ``swc.aeon.io.api.load`` cannot place them in
-    time. Epochs are therefore selected by directory name: every epoch starting in
-    ``[start, end)`` and, when none starts exactly at ``start``, the latest epoch that
-    started before it (it may still have been recording). A root that is itself an epoch
-    directory is used as is. Files are ordered by their integer suffix within each epoch.
+    ONIX binary files carry no timestamp. Every ephys epoch has HarpSync records that map
+    its acquisition clock to Harp time. For each epoch the window is converted to ticks
+    with that fit. The first and last tick of each file are read and a file is kept when
+    its tick range crosses the window. Which recording started or ended first does not
+    matter. Files are walked in write order and grouped into clock domains. A file whose
+    first tick is below the previous file's last tick starts a new domain (an ONIX
+    restart). The domains are matched to the epoch's HarpSync fits in order.
+
+    An epoch without HarpSync records cannot be placed in time. Its files are kept, with
+    no fit, when the epoch started inside the window or is the latest epoch that started
+    before it.
 
     Args:
-        root: Dataset root path or paths.
+        root: Dataset root path or paths. A root that is itself an epoch directory is used
+            as is.
         reader: The ``Binary`` reader whose pattern selects the clock stream.
         start: Left bound of the time range.
         end: Optional right bound of the time range.
 
     Returns:
-        Clock file paths in acquisition order.
+        The overlapping files in acquisition order, each with its fit and the window's
+        bounds in its ticks. Empty files are skipped.
     """
     roots = [root] if isinstance(root, str | PathLike) else list(root)
+    device = reader.pattern.split("_")[0]
     start = pd.to_datetime(start, utc=True)
     end = pd.to_datetime(end, utc=True) if end is not None else None
-    files: list[Path] = []
+    start_s = to_seconds(start)
+    end_s = to_seconds(end) if end is not None else None
+    files: list[ClockFile] = []
     for item in roots:
         base = Path(item)
         if is_epoch_dir(base):
-            epoch_dirs = [base]
+            dated = [(parse_epoch_timestamp(base), base)]
         elif base.is_dir():
             dated = sorted((parse_epoch_timestamp(d), d) for d in base.iterdir() if is_epoch_dir(d))
-            before = [d for t, d in dated if t < start]
-            within = [d for t, d in dated if t >= start and (end is None or t < end)]
-            starts_at_start = any(t == start for t, _ in dated)
-            epoch_dirs = ([before[-1]] if before and not starts_at_start else []) + within
         else:
-            epoch_dirs = []
-        for epoch_dir in epoch_dirs:
-            found = epoch_dir.glob(f"*/{reader.pattern}.{reader.extension}")
-            files.extend(sorted(found, key=file_index))
+            dated = []
+        before = [d for t, d in dated if t < start]
+        starts_at_start = any(t == start for t, _ in dated)
+        for t, epoch_dir in dated:
+            paths = sorted(epoch_dir.glob(f"*/{reader.pattern}.{reader.extension}"), key=file_index)
+            edges = [(path, read_edge_ticks(path, reader.dtype)) for path in paths]
+            edges = [(path, e) for path, e in edges if e is not None]
+            if not edges:
+                continue
+            fits = harp_sync_fits(epoch_dir, device)
+            if not fits:
+                by_name = (t >= start and (end is None or t < end)) or (
+                    bool(before) and not starts_at_start and epoch_dir == before[-1]
+                )
+                if by_name:
+                    files.extend(
+                        ClockFile(path, first, last, None, -np.inf, np.inf) for path, (first, last) in edges
+                    )
+                continue
+            domain = 0
+            previous_last: int | None = None
+            for path, (first, last) in edges:
+                if previous_last is not None and first < previous_last:
+                    domain += 1
+                previous_last = last
+                slope, intercept = fits[min(domain, len(fits) - 1)]
+                lo = (start_s - intercept) / slope
+                hi = (end_s - intercept) / slope if end_s is not None else np.inf
+                if last >= lo and first < hi:
+                    files.append(ClockFile(path, first, last, (slope, intercept), lo, hi))
     return files
 
 
 def iter_clock_blocks(
-    path: Path, dtype: DTypeLike = np.uint64, block_samples: int = BLOCK_SAMPLES
-) -> Iterator[np.ndarray]:
-    """Yield the ticks of a clock file as int64 arrays of at most ``block_samples``."""
-    with open(path, "rb") as f:
+    file: ClockFile, dtype: DTypeLike = np.uint64, block_samples: int = BLOCK_SAMPLES
+) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    """Yield the in-window ticks of a clock file as int64 arrays with their file positions."""
+    offset = 0
+    with open(file.path, "rb") as f:
         while True:
             block = np.fromfile(f, dtype=dtype, count=block_samples)
             if block.size == 0:
                 return
-            yield block.astype(np.int64)
+            ticks = block.astype(np.int64)
+            keep = (ticks >= file.tick_lo) & (ticks < file.tick_hi)
+            if keep.any():
+                yield ticks[keep], np.flatnonzero(keep) + offset
+            offset += block.size
 
 
-def harp_index(ticks: list[float], sync_fit: tuple[float, float] | None) -> pd.DatetimeIndex:
-    """Place clock ticks on Harp time with ``sync_fit``; ``NaT`` without one or for NaN ticks."""
-    values = np.asarray(ticks, dtype=np.float64)
+def harp_index(seconds: list[float]) -> pd.DatetimeIndex:
+    """Build a UTC ``time`` index from Harp seconds, with ``NaT`` where they are NaN."""
+    values = np.asarray(seconds, dtype=np.float64)
     finite = np.isfinite(values)
-    if sync_fit is None or not finite.any():
-        return pd.DatetimeIndex([pd.NaT] * len(ticks), name="time", tz=datetime.UTC)
-    seconds = HarpSyncAlignment.estimate_harp_seconds(values[finite], *sync_fit)
-    times = pd.Series(pd.NaT, index=range(len(ticks)), dtype="datetime64[ns, UTC]")
-    times[finite] = to_datetime(pd.Index(seconds))
+    times = pd.Series(pd.NaT, index=range(len(values)), dtype="datetime64[ns, UTC]")
+    if finite.any():
+        times[finite] = to_datetime(pd.Index(values[finite]))
     return pd.DatetimeIndex(times, name="time")
 
 
-def add_harp_time(worst: list[dict], sync_fit: tuple[float, float] | None) -> list[dict]:
-    """Return ``worst`` with a ``time`` entry (Harp time of ``clock_ticks``, or None) on each item."""
-    times = harp_index([w["clock_ticks"] for w in worst], sync_fit)
-    return [{**w, "time": None if pd.isna(t) else t} for w, t in zip(worst, times, strict=True)]
+def with_times(entries: list[dict]) -> list[dict]:
+    """Return ``entries`` with their ``seconds`` replaced by a ``time`` (Timestamp or None)."""
+    times = harp_index([e["seconds"] for e in entries])
+    return [
+        {**{k: v for k, v in e.items() if k != "seconds"}, "time": None if pd.isna(t) else t}
+        for e, t in zip(entries, times, strict=True)
+    ]
 
 
 def onix_clock_sequence(
@@ -371,35 +490,30 @@ def onix_clock_sequence(
     reader: Binary,
     start: datetime.datetime,
     end: datetime.datetime | None = None,
-    clock_rate_hz: float | None = None,
-    sync_fit: tuple[float, float] | None = None,
     block_samples: int = BLOCK_SAMPLES,
 ) -> pd.DataFrame:
     """Check that per-sample ONIX clock ticks advance by exactly one sample step.
 
-    Files are streamed block by block, carrying the last tick across blocks and files.
-    Memory use is bounded whatever the recording length. The nominal step is the
-    median step of the first block. A step is an event when it goes backwards, repeats,
-    or (for fixed-rate streams) is more than half a nominal step from it, that is when it
-    is not exactly one sample. Readers tagged ``uniform=False`` (orientation sensor, see
+    Only the samples inside the window are checked (see ``onix_clock_files``). Files are
+    streamed block by block, carrying the last tick across blocks and files. Memory use
+    is bounded whatever the recording length. The nominal step is the median step of the
+    first block. A step is an event when it goes backwards, repeats, or (for fixed-rate
+    streams) is more than half a nominal step from it, that is when it is not exactly one
+    sample. Readers tagged ``uniform=False`` (orientation sensor, see
     ``aeon_qc.onix.clock_reader``) have a legitimately irregular interval. Only backwards
-    steps and repeats are events for them. Every step's deviation from the
-    nominal step is kept as a histogram, per file and overall.
+    steps and repeats are events for them. Every step's deviation from the nominal step is
+    kept as a histogram, per file and overall.
 
     Args:
         root: Dataset root path or paths.
         reader: The ``Binary`` reader whose pattern selects the clock stream.
         start: Left bound of the time range.
         end: Optional right bound of the time range.
-        clock_rate_hz: Ticks per second used to convert steps to seconds. Defaults to
-            the fitted rate when ``sync_fit`` is given, else the nominal 250 MHz.
-        sync_fit: ``(slope, intercept)`` from ``harp_sync_drift`` mapping ticks to Harp
-            seconds. When given, rows are indexed by Harp time; otherwise by ``NaT``.
         block_samples: Samples read per block.
 
     Returns:
-        A DataFrame with one row per event, indexed by Harp time when ``sync_fit`` is
-        given and by ``NaT`` otherwise.
+        A DataFrame with one row per event, indexed by the Harp time of the sample from the
+        epoch's HarpSync fit, or by ``NaT`` when the epoch has no HarpSync records.
 
         - kind (str): ``backwards``, ``duplicate`` or ``jump``.
         - clock_ticks (int): The offending sample's clock value.
@@ -414,11 +528,6 @@ def onix_clock_sequence(
         deviations with their locations) and ``files`` (a DataFrame with one row per file).
     """
     files = onix_clock_files(root, reader, start=start, end=end)
-    rate = (
-        clock_rate_hz
-        if clock_rate_hz is not None
-        else (1.0 / sync_fit[0] if sync_fit is not None else float(NOMINAL_CLOCK_HZ))
-    )
     counts = {"backwards": 0, "duplicate": 0, "jump": 0}
     rows: list[dict] = []
     worst: list[dict] = []
@@ -429,17 +538,17 @@ def onix_clock_sequence(
     last: int | None = None
     truncated = False
     uniform = getattr(reader, "uniform", True)
-    for path in files:
-        index_offset = 0
+    rate = files[0].rate_hz if files else float(NOMINAL_CLOCK_HZ)
+    for file in files:
         file_stats = {
-            "file": path.name,
+            "file": file.path.name,
             "n_samples": 0,
             "first_tick": None,
             "last_tick": None,
             "max_abs_deviation_ticks": 0,
             "n_events": 0,
         }
-        for block in iter_clock_blocks(path, reader.dtype, block_samples):
+        for block, positions in iter_clock_blocks(file, reader.dtype, block_samples):
             n_samples += block.size
             file_stats["n_samples"] += block.size
             if file_stats["first_tick"] is None:
@@ -451,7 +560,6 @@ def onix_clock_sequence(
             shift = 1 if last is None else 0
             last = int(block[-1])
             if steps.size == 0:
-                index_offset += block.size
                 continue
             if nominal is None:
                 nominal = int(np.median(steps))
@@ -464,8 +572,9 @@ def onix_clock_sequence(
                     {
                         "deviation_ticks": int(deviation[k]),
                         "clock_ticks": int(block[k + shift]),
-                        "file": path.name,
-                        "index_in_file": int(k + shift + index_offset),
+                        "seconds": float(file.seconds(block[k + shift])),
+                        "file": file.path.name,
+                        "index_in_file": int(positions[k + shift]),
                     }
                     for k in top
                 ],
@@ -487,21 +596,22 @@ def onix_clock_sequence(
                     continue
                 rows.append(
                     {
+                        "seconds": float(file.seconds(block[k + shift])),
                         "kind": kind,
                         "clock_ticks": int(block[k + shift]),
                         "step_ticks": step,
-                        "step_seconds": step / rate,
-                        "file": path.name,
-                        "index_in_file": int(k + shift + index_offset),
+                        "step_seconds": step / file.rate_hz,
+                        "file": file.path.name,
+                        "index_in_file": int(positions[k + shift]),
                         "device": reader.pattern,
                     }
                 )
-            index_offset += block.size
         per_file.append(file_stats)
 
     result = empty_result(CLOCK_COLS, "onix_clock_sequence")
     if rows:
-        result = pd.DataFrame(rows, index=harp_index([r["clock_ticks"] for r in rows], sync_fit))
+        index = harp_index([r["seconds"] for r in rows])
+        result = pd.DataFrame([{k: v for k, v in r.items() if k != "seconds"} for r in rows], index=index)
     result.attrs.update(
         {
             "metric": "onix_clock_sequence",
@@ -515,7 +625,7 @@ def onix_clock_sequence(
             **{f"n_{k}": v for k, v in counts.items()},
             "deviation_histogram": histogram,
             "deviation_max_abs_ticks": abs(worst[0]["deviation_ticks"]) if worst else None,
-            "worst": add_harp_time(worst, sync_fit),
+            "worst": with_times(worst),
             "files": pd.DataFrame(per_file),
         }
     )
@@ -528,7 +638,6 @@ def onix_hub_offset(
     hub_reader: Binary,
     start: datetime.datetime,
     end: datetime.datetime | None = None,
-    sync_fit: tuple[float, float] | None = None,
     block_samples: int = BLOCK_SAMPLES,
 ) -> pd.DataFrame:
     """Measure the acquisition clock minus the headstage hub clock of every probe sample.
@@ -539,7 +648,9 @@ def onix_hub_offset(
     the link dropped or the hub clock re-locked. Nothing is filtered. The difference is
     summarised for every file. Its deviation from the usual value (the median of the
     first block) is kept as a histogram. The largest deviations are kept with their
-    locations. Files are streamed in pairs, block by block.
+    locations. The clock files are selected by time overlap (see ``onix_clock_files``).
+    Each is paired with the hub file of the same number and only the in-window samples
+    are used. Files are streamed in pairs, block by block.
 
     Args:
         root: Dataset root path or paths.
@@ -547,15 +658,11 @@ def onix_hub_offset(
         hub_reader: The ``Binary`` reader for the same stream's hub clock.
         start: Left bound of the time range.
         end: Optional right bound of the time range.
-        sync_fit: ``(slope, intercept)`` from ``harp_sync_drift`` mapping ticks to Harp
-            seconds. When given, rows are indexed by the Harp time of each file's first
-            sample and line up with the other QC results. Otherwise they are indexed by
-            ``NaT``.
         block_samples: Samples read per block.
 
     Returns:
-        A DataFrame with one row per file, indexed by the Harp time of its first sample
-        when ``sync_fit`` is given and by ``NaT`` otherwise.
+        A DataFrame with one row per file, indexed by the Harp time of its first in-window
+        sample from the epoch's HarpSync fit, or by ``NaT`` when the epoch has none.
 
         - file (str), n_samples (int).
         - min_offset_ticks, mean_offset_ticks, max_offset_ticks (float): Acquisition clock
@@ -568,78 +675,89 @@ def onix_hub_offset(
         ``|offset - nominal|`` per power-of-two bucket), ``deviation_max_abs_ticks`` and
         ``worst`` (the largest deviations with their locations).
     """
-    clock_files = onix_clock_files(root, clock_reader, start=start, end=end)
-    hub_files = onix_clock_files(root, hub_reader, start=start, end=end)
+    clock_prefix = clock_reader.pattern.rstrip("*")
+    hub_prefix = hub_reader.pattern.rstrip("*")
     rows: list[dict] = []
-    first_ticks: list[float] = []
+    first_seconds: list[float] = []
     worst: list[dict] = []
     histogram = np.zeros(HISTOGRAM_BUCKETS, dtype=np.int64)
     n_samples = 0
     nominal: int | None = None
 
-    for clock_path, hub_path in zip(clock_files, hub_files, strict=False):
-        index_offset = 0
+    for file in onix_clock_files(root, clock_reader, start=start, end=end):
+        hub_path = file.path.with_name(file.path.name.replace(clock_prefix, hub_prefix, 1))
+        if not hub_path.is_file():
+            continue
         file_row = {
-            "file": clock_path.name,
+            "file": file.path.name,
             "n_samples": 0,
             "min_offset_ticks": None,
             "mean_offset_ticks": None,
             "max_offset_ticks": None,
-            "length_mismatch": clock_path.stat().st_size != hub_path.stat().st_size,
+            "length_mismatch": file.path.stat().st_size != hub_path.stat().st_size,
             "device": clock_reader.pattern,
         }
         total = 0.0
         first_tick: int | None = None
-        blocks = zip(
-            iter_clock_blocks(clock_path, clock_reader.dtype, block_samples),
-            iter_clock_blocks(hub_path, hub_reader.dtype, block_samples),
-            strict=False,
-        )
-        for clock_block, hub_block in blocks:
-            size = min(clock_block.size, hub_block.size)
-            clock = clock_block[:size]
-            offset = clock - hub_block[:size]
-            if size == 0:
-                continue
-            if first_tick is None:
-                first_tick = int(clock[0])
-            if nominal is None:
-                nominal = int(np.median(offset))
-            deviation = offset - nominal
-            histogram += magnitude_histogram(deviation)
-            top = np.argsort(np.abs(deviation))[-WORST_N:]
-            worst = keep_worst(
-                worst,
-                [
-                    {
-                        "deviation_ticks": int(deviation[k]),
-                        "clock_ticks": int(clock[k]),
-                        "file": clock_path.name,
-                        "index_in_file": int(k + index_offset),
-                    }
-                    for k in top
-                ],
-                key="deviation_ticks",
-            )
-            low, high = int(offset.min()), int(offset.max())
-            file_row["min_offset_ticks"] = (
-                low if file_row["min_offset_ticks"] is None else min(file_row["min_offset_ticks"], low)
-            )
-            file_row["max_offset_ticks"] = (
-                high if file_row["max_offset_ticks"] is None else max(file_row["max_offset_ticks"], high)
-            )
-            total += float(offset.sum())
-            file_row["n_samples"] += size
-            n_samples += size
-            index_offset += size
+        with open(file.path, "rb") as clock_f, open(hub_path, "rb") as hub_f:
+            offset_in_file = 0
+            while True:
+                clock_block = np.fromfile(clock_f, dtype=clock_reader.dtype, count=block_samples)
+                hub_block = np.fromfile(hub_f, dtype=hub_reader.dtype, count=block_samples)
+                size = min(clock_block.size, hub_block.size)
+                if size == 0:
+                    break
+                ticks = clock_block[:size].astype(np.int64)
+                keep = (ticks >= file.tick_lo) & (ticks < file.tick_hi)
+                positions = np.flatnonzero(keep) + offset_in_file
+                offset_in_file += size
+                if not keep.any():
+                    continue
+                clock = ticks[keep]
+                offset = clock - hub_block[:size].astype(np.int64)[keep]
+                if first_tick is None:
+                    first_tick = int(clock[0])
+                if nominal is None:
+                    nominal = int(np.median(offset))
+                deviation = offset - nominal
+                histogram += magnitude_histogram(deviation)
+                top = np.argsort(np.abs(deviation))[-WORST_N:]
+                worst = keep_worst(
+                    worst,
+                    [
+                        {
+                            "deviation_ticks": int(deviation[k]),
+                            "clock_ticks": int(clock[k]),
+                            "seconds": float(file.seconds(clock[k])),
+                            "file": file.path.name,
+                            "index_in_file": int(positions[k]),
+                        }
+                        for k in top
+                    ],
+                    key="deviation_ticks",
+                )
+                low, high = int(offset.min()), int(offset.max())
+                file_row["min_offset_ticks"] = (
+                    low if file_row["min_offset_ticks"] is None else min(file_row["min_offset_ticks"], low)
+                )
+                file_row["max_offset_ticks"] = (
+                    high
+                    if file_row["max_offset_ticks"] is None
+                    else max(file_row["max_offset_ticks"], high)
+                )
+                total += float(offset.sum())
+                file_row["n_samples"] += int(keep.sum())
+                n_samples += int(keep.sum())
         if file_row["n_samples"]:
             file_row["mean_offset_ticks"] = total / file_row["n_samples"]
         rows.append(file_row)
-        first_ticks.append(float(first_tick) if first_tick is not None else float("nan"))
+        first_seconds.append(
+            float(file.seconds(np.array([first_tick]))[0]) if first_tick is not None else float("nan")
+        )
 
     result = empty_result(HUB_COLS, "onix_hub_offset")
     if rows:
-        result = pd.DataFrame(rows, index=harp_index(first_ticks, sync_fit))
+        result = pd.DataFrame(rows, index=harp_index(first_seconds))
     lows = [r["min_offset_ticks"] for r in rows if r["min_offset_ticks"] is not None]
     highs = [r["max_offset_ticks"] for r in rows if r["max_offset_ticks"] is not None]
     result.attrs.update(
@@ -653,7 +771,7 @@ def onix_hub_offset(
             "max_offset_ticks": max(highs) if highs else None,
             "deviation_histogram": histogram,
             "deviation_max_abs_ticks": abs(worst[0]["deviation_ticks"]) if worst else None,
-            "worst": add_harp_time(worst, sync_fit),
+            "worst": with_times(worst),
         }
     )
     return result
