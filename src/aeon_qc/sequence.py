@@ -57,7 +57,8 @@ def timestamp_order(
     if data.empty:
         return result
 
-    steps = data.index.to_series().diff().dt.total_seconds().to_numpy()
+    # pandas-stubs before 3.0 type the diffed index as a float series.
+    steps = data.index.to_series().diff().dt.total_seconds().to_numpy()  # pyright: ignore[reportAttributeAccessIssue]
     backwards = steps < 0
     duplicate = steps == 0
     mask = backwards | duplicate
