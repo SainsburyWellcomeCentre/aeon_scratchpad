@@ -15,10 +15,21 @@ Consider folding back into [`aeon_api`](https://github.com/SainsburyWellcomeCent
 | Sync delta | `sync_delta` | Per-second timestamp drift between Harp devices relative to the ClockSynchronizer |
 | Harp sync alerts | `<device>.harp_sync_alerts` | HarpSynch alerts from the Bonsai SynchronizerMonitor (device count or clock misalignment) |
 | Dropped frames | `<device>.Video` | Jumps in the camera hardware frame counter indicating lost frames |
-| Encoder gaps | `<device>.Encoder` | Dropped samples in the wheel encoder stream (~500 Hz) |
+| Continuous-stream gaps | `<device>.Encoder`, `Photodiode`, `VideoController` | Missing samples in fixed rate Harp streams (encoder 500 Hz, photodiode 1 kHz, camera trigger 50 Hz). Over each run of irregular intervals, the measured interval count is compared with the count expected for its span, differentiating missing from late samples. The interval distribution and longest intervals are reported |
 | Pellet failures | `<device>.pellet_stats` | Hardware-reported missed and retried pellet deliveries |
 | Message log errors | `<device>.message_log` | Warning and Error entries from the Bonsai message log |
 | Environment state durations | `<device>.environment_state` | Time spent in each environment state (Running, Maintenance) |
+| Timestamp order | `<device>.<stream>.order` | Timestamps that go backwards or repeat within any Harp or CSV stream, read in file order without sorting |
+| HarpSync integrity | `<device>.HarpSync` | Every ONIX HarpSync step: Harp seconds that skip, repeat or step back, plus each clock step's deviation from the median. Reports the `Seconds` offset convention |
+| HarpSync drift | `<device>.HarpSync.drift` | Residuals of a linear fit of Harp time on ONIX clock ticks for each hourly chunk, as analysis aligns the data. Per-chunk clock rate and worst residual |
+| ONIX clock sequence | `<device>.<Stream>Clock` | Per-sample ONIX clock ticks that step backwards, repeat or jump |
+| ONIX hub clock offset | `<device>.<Probe>HubSyncCounter` | Probe acquisition clock minus headstage hub clock, per file and as a distribution, with the largest deviations. A change means the headstage link dropped |
+
+Ephys datasets are recorded on a separate machine under their own rig folder. Give the behaviour root and the ephys root together, behaviour first. The ONIX streams are discovered from the second root. The ephys samples for the window are selected by time shared with the behavior data, i.e. Harp Time. Each ephys epoch's HarpSync records place its clock on Harp time and only the samples inside the window are checked.
+
+```python
+results = run_qc(["/data/raw/<rig>/<behaviour_experiment>", "/data/raw/<ephys_rig>/<ephys_experiment>"], schema, start=start)
+```
 
 ## Installation
 

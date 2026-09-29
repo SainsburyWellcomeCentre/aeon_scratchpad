@@ -7,7 +7,7 @@ title: Interactive QC on an Aeon dataset
 
 `aeon-qc` inspects Project Aeon raw datasets and reports on data quality across all acquisition devices. It reads directly from the dataset directory structure using the `swc-aeon` API. Please note that successful use of this and other tools depend on data being logge din the AEON standard format. 
 
-This tutorial covers interactive use — running QC from a Python script or notebook on a single dataset window. For running QC across many datasets and epochs automatically, see [Batch QC with benchmarks.yaml](batch-qc.md).
+This tutorial covers interactive use: running QC from a Python script or notebook on a single dataset window. For running QC across many datasets and epochs automatically, see [Batch QC with benchmarks.yaml](batch-qc.md).
 
 ## What it checks
 
@@ -19,7 +19,7 @@ This tutorial covers interactive use — running QC from a Python script or note
 | Sync delta | Timestamp drift between Harp devices relative to the clock synchroniser |
 | Harp sync alerts | HarpSync alert entries parsed from the Bonsai message log |
 | Dropped video frames | Jumps in the camera hardware frame counter |
-| Encoder gaps | Dropped samples in the wheel encoder stream |
+| Continuous-stream gaps | Missing samples in fixed-rate Harp streams (encoder, photodiode, camera trigger), with the interval distribution |
 | Pellet failures | Hardware-reported missed and retried pellet deliveries |
 | Message log errors | Warning and Error entries from the Bonsai message log |
 | Environment state durations | Time spent in Running vs Maintenance states |
@@ -68,7 +68,7 @@ generate_report(root, results, "qc_report.yaml", start=start, end=end)
 ```
 
 > [!TIP]
-> `end` is optional. Omitting it runs QC across all epochs that begin after `start`, which may take a long time for long experiments.
+> `end` is optional. Omitting it runs QC across all epochs that begin after `start`. That may take a long time for long experiments.
 
 ---
 
@@ -112,6 +112,8 @@ Available registry keys:
 | `social03` | Social 0.3 (AEON3/4) |
 | `social04` | Social 0.4 (AEON3/4) |
 | `octagon01` | Octagon 0.1 (OCTAGON01) |
+| `socialephys01` | ONIX ephys test recording (AEONX1, NeuropixelsV2Beta headstage) |
+| `abcephys01` | ForagingABC ephys (NeuropixelsV2 headstage only) |
 
 `schema_from_metadata` automatically selects the matching registry schema if the root path contains a recognisable experiment name (e.g. `social0.2` → `social02`). The auto-discovery fallback (Heartbeat + Video only) is used for unknown experiment types.
 
@@ -119,7 +121,7 @@ Available registry keys:
 
 ## Reading the results
 
-`run_qc` returns a `dict[str, pd.DataFrame]`. Each key identifies a device stream or metric; each value is a tidy DataFrame with a UTC `DatetimeIndex`.
+`run_qc` returns a `dict[str, pd.DataFrame]`. Each key identifies a device stream or metric. Each value is a tidy DataFrame with a UTC `DatetimeIndex`.
 
 ```python
 results["epoch_gaps"]                              # one row per Bonsai session start
@@ -134,7 +136,13 @@ results["Patch1.pellet_stats"]                     # pellet delivery failures fo
 results["Environment.harp_sync_alerts"]            # HarpSync alert log entries
 results["Environment.message_log"]                 # non-Info Bonsai log entries
 results["Environment.environment_state"]           # time in Running / Maintenance states
+results["Patch1.Heartbeat.order"]                  # timestamps that go backwards or repeat (every Harp and CSV stream gets one)
+results["NeuropixelsV2.HarpSync"]                  # ONIX HarpSync integrity (ephys datasets)
+results["NeuropixelsV2.HarpSync.drift"]            # ONIX clock vs Harp time linear fit residuals
+results["NeuropixelsV2.ProbeAClock"]               # per-sample ONIX clock sequence for probe A
 ```
+
+`run_qc` accepts a list of roots as well as a single path. Ephys data is recorded on a separate machine and lands under its own rig folder. Pass the behaviour root first and the ephys root second. The ONIX streams are then found in the second root. The ephys samples for the window are selected by time overlap (see the ONIX timing checks below). Every stream is loaded once, in file order. The timestamp order check runs on the frame as read. The sorted frame then feeds the other metrics.
 
 Each DataFrame carries metadata in `.attrs`:
 
@@ -144,7 +152,7 @@ df.attrs["data_found"]   # False if no files were found on disk for this device
 df.attrs["n_frames"]     # total frames counted (including dropped)
 ```
 
-An empty DataFrame with `data_found=False` means the device was in the schema but produced no data files — this is expected for `WeightScale` devices which do not emit heartbeats.
+An empty DataFrame with `data_found=False` means the device was in the schema but produced no data files. This is expected for `WeightScale` devices which do not emit heartbeats.
 
 ---
 
@@ -215,6 +223,57 @@ print(f"{n_deliveries} deliveries: {n_retried} retried, {n_missed} missed")
 df = results["Environment.message_log"]
 # columns: priority, type, message
 ```
+
+### Timestamp order
+
+```python
+df = results["Patch1.Heartbeat.order"]
+# columns: kind ('backwards' or 'duplicate'), step_seconds, index_in_stream, device
+# index:   UTC timestamp of the violating sample
+# attrs:   n_samples, n_backwards, n_duplicates, max_backwards_seconds
+```
+
+The stream is read in file order without sorting. A sample stamped earlier than its predecessor shows up as a `backwards` row with a negative `step_seconds`.
+
+### ONIX timing checks
+
+The four ONIX checks keep what they measure instead of filtering it through a tolerance. What counts as acceptable can be decided later from the saved results without rerunning QC. Rows are reserved for events defined by a natural rule: a Harp second that is skipped, repeated or goes backwards, or a clock step that is not exactly one sample.
+
+```python
+df = results["NeuropixelsV2.HarpSync"]
+# one row per step between HarpSync records
+# columns: kind ('ok', 'harp_time_gap', 'harp_time_duplicate', 'harp_time_backwards'),
+#          harp_step, clock_step_ticks, deviation_ticks, device
+# attrs:   n_sync_events, n_faults, seconds_offset, clock_step_median_ticks, clock_step_ppm,
+#          deviation_median_abs_ticks, deviation_p99_abs_ticks, deviation_max_abs_ticks
+
+drift = results["NeuropixelsV2.HarpSync.drift"]
+# one row per record: residual_seconds against its hourly chunk's fit, chunk, device
+# attrs:   chunks (rate and max residual per chunk and clock segment), n_chunks, n_clock_resets,
+#          worst_chunk_max_abs_residual_ms, clock_rate_hz, clock_rate_ppm,
+#          fit (slope, intercept of the largest clock segment)
+```
+
+`deviation_ticks` is how far each second's ONIX clock step sits from the recording's median step. Normal jitter is a few tens of nanoseconds. A late or early pulse shows up directly. The drift fit is done per hourly chunk because that is how ephys data is placed on Harp time (`swc.aeon.io.reader.HarpSyncAlignment`). A single fit over days hides nothing useful and its r² reads 1.0 even when it is hundreds of milliseconds off. An ONIX restart resets the acquisition clock. The records are split into clock segments where the clock steps backwards. Each segment is fitted on its own and `n_clock_resets` counts them. `seconds_offset` is 1 for recordings whose workflow added the protocol second a second time (the `Seconds` column was one second late) and 0 otherwise. `harp_time` is correct in both cases and is what the fits use.
+
+```python
+df = results["NeuropixelsV2.ProbeAClock"]
+# one row per event: kind ('backwards', 'duplicate', 'jump'), clock_ticks, step_ticks,
+#          step_seconds, file, index_in_file, device. The index is Harp time when a fit exists
+# attrs:   n_samples, n_files, nominal_step_ticks, inferred_rate_hz, per-kind counts, truncated,
+#          deviation_histogram, deviation_max_abs_ticks, worst, files (one row per file)
+
+hub = results["NeuropixelsV2.ProbeAHubSyncCounter"]
+# one row per file: min_offset_ticks, mean_offset_ticks, max_offset_ticks, length_mismatch
+# attrs:   nominal_offset_ticks, min_offset_ticks, max_offset_ticks, deviation_histogram,
+#          deviation_max_abs_ticks, worst (largest deviations with file, index and Harp time)
+```
+
+The clock files carry no timestamps of their own. For each ephys epoch the QC window is converted to clock ticks with that epoch's HarpSync fit. A file is kept when its first and last ticks cross the window. Only the samples inside the window are checked. The ephys recording may start before or after the behaviour epoch. Only the overlap is checked and every event is placed on Harp time. An epoch without HarpSync records cannot be placed in time. Its files are checked whole when the epoch directory name falls inside the window, or is the latest one before it.
+
+A clock step is a `jump` when it is more than half a nominal step from it, that is when it is not exactly one sample. The single-sample jump of 2^32 ticks (17.18 s at 250 MHz) reported in aeon_roadmap#78 shows up as a `jump` followed by a `backwards` row. The orientation sensor stream is only checked for backwards steps and repeats: its sample interval varies. The commutator clock is not checked: each turn command copies the clock of the orientation frame that triggered it.
+
+Each probe sample carries the acquisition clock and the headstage hub clock. While the headstage link is healthy their difference stays within a few ticks. A lasting change means the link dropped or the hub clock re-locked. The histograms count deviations in power-of-two buckets (`0`, `<2^1`, `<2^2`, ...). The full distribution is kept for recordings of any length.
 
 ---
 
