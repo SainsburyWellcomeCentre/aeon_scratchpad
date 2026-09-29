@@ -7,3 +7,4 @@ devdata/
 tests/
 .coverage
 notebooks/qc_results/
+benchmarks_output/
